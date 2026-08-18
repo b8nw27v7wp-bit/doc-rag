@@ -8,13 +8,14 @@ DocRAG 的测试分层：单元测试（`npm test`）+ 专项验证脚本（`scr
 npm test
 ```
 
-运行 `node --test`（20 项），覆盖：
+运行 `node --test`（31 项），覆盖：
 
 | 文件 | 覆盖点 |
 |---|---|
 | `tests/chunk.test.ts` | 空文本、短文本、段落聚合、超长段落硬切、overlap 一致性、默认参数在真实文档规模下的表现 |
 | `tests/vector.test.ts` | 点积正确性、top-k 排序与截断、低分过滤、BLOB 往返一致性 |
-| `tests/rag.test.ts` | 引用编号提取（去重/升序）、prompt 组装、RAG 常量合理性 |
+| `tests/rag.test.ts` | 引用编号提取、prompt 组装、**多轮历史注入与截断**、system prompt 规则 |
+| `tests/db.test.ts` | 会话 CRUD、docIds 范围存取、消息追加/级联删除、自动标题生成（≤24 字）、列表排序与消息数统计（隔离临时数据目录） |
 
 ## 专项验收脚本
 
@@ -33,9 +34,17 @@ npm run build && npm start   # 另开终端
 node scripts/verify-api.mjs
 ```
 
-验证：服务可达 → 文档列表 → 上传样例文档（含独特关键词）→ 入库 → 文档数 +1 → 问答接口返回 NDJSON 事件流 → 检索命中刚上传的文档 → 引用编号连续且与 sources 一致 → 清理测试文档。全部 PASS 输出 `VERIFY_OK`。
+验证：服务可达 → 文档列表 → 上传样例文档（含独特关键词）→ 入库 → 文档数 +1 → 问答接口返回 NDJSON 事件流 → 检索命中刚上传的文档 → 引用编号连续且与 sources 一致 → **会话全流程（创建会话 → 会话内问答 → 用户提问存档 → 标题自动生成 → 会话列表统计 → 无 sessionId 自动建会话并回传 id → 清理）** → 清理测试文档。全部 PASS 输出 `VERIFY_OK`。
 
-注意：问答环节到 LLM 调用边界为止 —— 未配置真实 Key 时校验错误事件清晰（不要求 200）；配置了 `LLM_API_KEY` 或前端填入 Key 后，会校验完整的 delta 流。
+注意：问答环节到 LLM 调用边界为止 —— 未配置真实 Key 时校验错误事件清晰（不要求 200）；配置了 `LLM_API_KEY` 或前端填入 Key 后，会校验完整的 delta 流与 sources 引用。
+
+### import-cli.ts —— 批量导入
+
+```bash
+DATA_DIR=$(mktemp -d) npx tsx scripts/import-cli.ts <文件或目录>
+```
+
+验证：目录递归收集、解析入库、汇总统计；失败文件不中断整体流程。输出「成功 x / 失败 y，新增 z 向量块」。
 
 ## 复现问题
 

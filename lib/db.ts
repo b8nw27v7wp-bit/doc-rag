@@ -40,6 +40,25 @@ CREATE TABLE IF NOT EXISTS chunks (
 );
 
 CREATE INDEX IF NOT EXISTS idx_chunks_doc ON chunks(doc_id);
+
+CREATE TABLE IF NOT EXISTS sessions (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  title      TEXT    NOT NULL DEFAULT '新会话',
+  doc_ids    TEXT    NOT NULL DEFAULT '',
+  created_at TEXT    NOT NULL DEFAULT (datetime('now', 'localtime')),
+  updated_at TEXT    NOT NULL DEFAULT (datetime('now', 'localtime'))
+);
+
+CREATE TABLE IF NOT EXISTS messages (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  role       TEXT    NOT NULL,
+  content    TEXT    NOT NULL,
+  refs       TEXT    NOT NULL DEFAULT '',
+  created_at TEXT    NOT NULL DEFAULT (datetime('now', 'localtime'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, id);
 `);
     db = d;
   }
@@ -167,6 +186,143 @@ export function dbSizeBytes(): number {
   } catch {
     return 0;
   }
+}
+
+// ────────────────────────── 会话与消息 ──────────────────────────
+
+export interface SessionRecord {
+  id: number;
+  title: string;
+  /** 检索范围：空数组 = 全部文档 */
+  docIds: number[];
+  createdAt: string;
+  updatedAt: string;
+  messageCount: number;
+}
+
+export interface MessageRecord {
+  id: number;
+  sessionId: number;
+  role: 'user' | 'assistant';
+  content: string;
+  /** assistant 消息的引用来源 JSON（SourceHit[] 序列化文本） */
+  refs: string;
+  createdAt: string;
+}
+
+function parseDocIds(raw: string): number[] {
+  return raw
+    .split(',')
+    .map((s) => Number(s.trim()))
+    .filter((n) => Number.isFinite(n) && n > 0);
+}
+
+/** 新建会话：title 空时自动取「新会话」，返回会话 id */
+export function createSession(title: string, docIds: number[] = []): number {
+  const d = getDb();
+  const res = d
+    .prepare('INSERT INTO sessions (title, doc_ids) VALUES (?, ?)')
+    .run(title.trim() || '新会话', docIds.join(','));
+  return Number(res.lastInsertRowid);
+}
+
+/** 会话列表（最近更新在前，附带消息数） */
+export function listSessions(): SessionRecord[] {
+  const rows = getDb()
+    .prepare(
+      `SELECT s.id, s.title, s.doc_ids, s.created_at, s.updated_at,
+              (SELECT COUNT(*) FROM messages m WHERE m.session_id = s.id) AS message_count
+       FROM sessions s ORDER BY s.updated_at DESC, s.id DESC`
+    )
+    .all() as unknown as {
+    id: number;
+    title: string;
+    doc_ids: string;
+    created_at: string;
+    updated_at: string;
+    message_count: number;
+  }[];
+  return rows.map((r) => ({
+    id: r.id,
+    title: r.title,
+    docIds: parseDocIds(r.doc_ids),
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+    messageCount: Number(r.message_count),
+  }));
+}
+
+export function getSession(id: number): { id: number; title: string; docIds: number[] } | null {
+  const row = getDb().prepare('SELECT id, title, doc_ids FROM sessions WHERE id = ?').get(id) as
+    | { id: number; title: string; doc_ids: string }
+    | undefined;
+  if (!row) return null;
+  return { id: row.id, title: row.title, docIds: parseDocIds(row.doc_ids) };
+}
+
+export function updateSessionTitle(id: number, title: string): void {
+  getDb().prepare('UPDATE sessions SET title = ?, updated_at = datetime(\'now\', \'localtime\') WHERE id = ?').run(title.trim() || '新会话', id);
+}
+
+/** 更新会话检索范围（文档 id 列表，空数组 = 全部） */
+export function updateSessionDocIds(id: number, docIds: number[]): void {
+  getDb()
+    .prepare('UPDATE sessions SET doc_ids = ?, updated_at = datetime(\'now\', \'localtime\') WHERE id = ?')
+    .run(docIds.join(','), id);
+}
+
+/** 更新会话活动时间；标题为默认值时用 message 标题化 */
+export function touchSession(id: number, message: string): void {
+  const d = getDb();
+  d.prepare('UPDATE sessions SET updated_at = datetime(\'now\', \'localtime\') WHERE id = ?').run(id);
+  const s = getSession(id);
+  if (s && s.title === '新会话') {
+    updateSessionTitle(id, titleFromMessage(message));
+  }
+}
+
+/** 从首条提问截取会话标题（≤24 字，单行） */
+export function titleFromMessage(msg: string): string {
+  const oneLine = msg.replace(/\s+/g, ' ').trim();
+  return oneLine.length > 24 ? `${oneLine.slice(0, 24)}…` : oneLine;
+}
+
+export function deleteSession(id: number): void {
+  getDb().prepare('DELETE FROM sessions WHERE id = ?').run(id); // messages 级联删除
+}
+
+export function appendMessage(sessionId: number, role: 'user' | 'assistant', content: string, refs = ''): number {
+  const res = getDb()
+    .prepare('INSERT INTO messages (session_id, role, content, refs) VALUES (?, ?, ?, ?)')
+    .run(sessionId, role, content, refs);
+  return Number(res.lastInsertRowid);
+}
+
+/** 会话全部消息（时间正序） */
+export function listMessages(sessionId: number): MessageRecord[] {
+  const rows = getDb()
+    .prepare('SELECT id, session_id, role, content, refs, created_at FROM messages WHERE session_id = ? ORDER BY id ASC')
+    .all(sessionId) as unknown as {
+    id: number;
+    session_id: number;
+    role: 'user' | 'assistant';
+    content: string;
+    refs: string;
+    created_at: string;
+  }[];
+  return rows.map((r) => ({
+    id: r.id,
+    sessionId: r.session_id,
+    role: r.role,
+    content: r.content,
+    refs: r.refs,
+    createdAt: r.created_at,
+  }));
+}
+
+export function sessionCount(): number {
+  const row = getDb().prepare('SELECT COUNT(*) AS n FROM sessions').get() as { n: number };
+  return Number(row.n);
 }
 
 export { DATA_DIR };

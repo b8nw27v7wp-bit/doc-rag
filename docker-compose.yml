@@ -1,0 +1,18 @@
+services:
+  docrag:
+    build: .
+    container_name: docrag
+    ports:
+      - "3000:3000"
+    environment:
+      # 国内网络下载嵌入模型必需
+      HF_ENDPOINT: https://hf-mirror.com
+      # 服务端兜底 LLM 配置（前端 BYOK 优先；不配置则用户必须在页面填写 Key）
+      # LLM_API_KEY: sk-xxxxxxxx
+      # LLM_BASE_URL: https://api.deepseek.com/v1
+      # LLM_MODEL: deepseek-chat
+      # 可选：局域网部署访问密码
+      # APP_PASSWORD: change-me
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
