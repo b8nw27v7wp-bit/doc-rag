@@ -9,6 +9,7 @@ interface SourceItem {
   idx: number;
   text: string;
   score: number;
+  keywordScore?: number;
 }
 
 interface Msg {
@@ -481,6 +482,7 @@ function MessageBubble({ msg }: { msg: Msg }) {
               }`}
             >
               {s.n} · {s.docName} · {s.score}
+              {s.keywordScore ? ` / 词 ${s.keywordScore}` : ''}
             </button>
           ))}
         </div>
@@ -494,6 +496,7 @@ function MessageBubble({ msg }: { msg: Msg }) {
               <div key={s.n}>
                 <p className="mb-1.5 text-[11px] font-medium text-[#86868b]">
                   来源 {s.n} · 《{s.docName}》第 {s.idx + 1} 段 · 相似度 {s.score}
+                  {s.keywordScore ? ` · 关键词 ${s.keywordScore}` : ''}
                 </p>
                 <p className="whitespace-pre-wrap">{s.text}</p>
               </div>

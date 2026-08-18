@@ -17,7 +17,7 @@ import {
   type ChunkRecord,
 } from '@/lib/db';
 import { embedText } from '@/lib/embed';
-import { topK } from '@/lib/vector';
+import { hybridSearch } from '@/lib/search';
 import {
   buildRagMessages,
   extractRefs,
@@ -104,17 +104,26 @@ export async function POST(req: NextRequest) {
           }
         }
         const qvec = await embedText(message);
-        const hits = topK(candidates.map((c) => c.embedding), qvec, RAG_TOP_K, RAG_MIN_SCORE);
+        // 混合检索：向量语义 + BM25 关键词，RRF 融合
+        const hits = hybridSearch({
+          embeddings: candidates.map((c) => c.embedding),
+          texts: candidates.map((c) => c.text),
+          queryEmbedding: qvec,
+          query: message,
+          k: RAG_TOP_K,
+          vectorMin: RAG_MIN_SCORE,
+        });
         if (hits.length === 0) {
           send({ type: 'error', message: '没有检索到与问题相关的资料，换个问法或补充文档试试' });
           return;
         }
-        const sources: SourceHit[] = hits.map((h) => ({
-          n: h.index + 1,
+        const sources: SourceHit[] = hits.map((h, rank) => ({
+          n: rank + 1,
           docName: candidates[h.index].docName,
           idx: candidates[h.index].idx,
           text: candidates[h.index].text.slice(0, 300),
-          score: Math.round(h.score * 100) / 100,
+          score: h.vectorScore,
+          keywordScore: h.keywordScore,
         }));
 
         // 存档用户提问（先存，失败时也能在会话里看到）

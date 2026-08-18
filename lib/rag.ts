@@ -9,6 +9,8 @@ export interface SourceHit {
   idx: number;
   text: string;
   score: number;
+  /** 混合检索中的关键词分（0 = 未被关键词检索命中） */
+  keywordScore?: number;
 }
 
 export const RAG_TOP_K = 6;

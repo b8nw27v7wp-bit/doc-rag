@@ -8,12 +8,13 @@ DocRAG 的测试分层：单元测试（`npm test`）+ 专项验证脚本（`scr
 npm test
 ```
 
-运行 `node --test`（31 项），覆盖：
+运行 `node --test`（39 项），覆盖：
 
 | 文件 | 覆盖点 |
 |---|---|
 | `tests/chunk.test.ts` | 空文本、短文本、段落聚合、超长段落硬切、overlap 一致性、默认参数在真实文档规模下的表现 |
 | `tests/vector.test.ts` | 点积正确性、top-k 排序与截断、低分过滤、BLOB 往返一致性 |
+| `tests/bm25.test.ts` | tokenizer（英文词/中文 bigram/单字兜底）、BM25 排序与 tf 权重、专有名词精确匹配、RRF 融合带出关键词命中、k 截断、全不相关返回空 |
 | `tests/rag.test.ts` | 引用编号提取、prompt 组装、**多轮历史注入与截断**、system prompt 规则 |
 | `tests/db.test.ts` | 会话 CRUD、docIds 范围存取、消息追加/级联删除、自动标题生成（≤24 字）、列表排序与消息数统计（隔离临时数据目录） |
 
