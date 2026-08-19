@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.5.1] - 2026-08-19
+
+### Security
+
+- 修复密码门绕过：鉴权 cookie 由 `APP_PASSWORD` 单向 SHA-256 派生并恒定时间比较，不再是可伪造的固定值 `1`
+- 修复 API 未受保护：设置 `APP_PASSWORD` 后，`proxy` 同时保护页面与全部 `/api/*`（登录页与 `/api/lock` 除外），未认证 API 请求返回 401
+- 修复 SSRF：LLM `baseURL`（来自请求头 BYOK 透传）经 `validateBaseURL` 校验——仅允许 http/https，阻断云元数据 169.254.169.254 / 0.0.0.0 / `::` / 链路本地 fe80: 等保留地址
+- 登录接口新增滑动窗口限流（默认 60s 内 10 次），防暴力枚举
+- 单条问题长度上限（4000 字）、批量删除上限（500 份）、HTTPS 下登录 cookie 自动加 `secure`
+- 新增 `lib/auth.ts` / `lib/ssrf.ts` / `lib/rateLimit.ts`；单测新增 12 项（鉴权派生与校验、端点白名单校验、限流窗口），共 103 项全绿
+
 ## [0.5.0] - 2026-08-19
 
 ### Added

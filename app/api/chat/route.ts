@@ -30,8 +30,12 @@ import {
 } from '@/lib/rag';
 import { streamChat, chatOnce, type ChatMsg } from '@/lib/llm';
 import { buildQueryExpansionPrompt, parseQueryLines, MAX_QUERIES } from '@/lib/multiQuery';
+import { validateBaseURL, UnsafeBaseUrlError } from '@/lib/ssrf';
 
 export const runtime = 'nodejs';
+
+/** 单条问题长度上限（防超长消息撑爆上下文/滥用） */
+const MAX_MESSAGE_LEN = 4000;
 
 interface ChatBody {
   message?: string;
@@ -50,6 +54,9 @@ export async function POST(req: NextRequest) {
   }
   const message = body.message?.trim();
   if (!message) return Response.json({ error: '缺少 message' }, { status: 400 });
+  if (message.length > MAX_MESSAGE_LEN) {
+    return Response.json({ error: `问题过长（最多 ${MAX_MESSAGE_LEN} 字）` }, { status: 400 });
+  }
 
   // 会话解析：无 id 自动新建；有 id 需存在
   let sessionId = Number(body.sessionId) || 0;
@@ -74,11 +81,22 @@ export async function POST(req: NextRequest) {
 
   // 配置解析：请求头优先（BYOK），环境变量兜底
   const apiKey = req.headers.get('x-api-key')?.trim() || process.env.LLM_API_KEY?.trim() || '';
-  const baseURL =
+  const baseURLRaw =
     req.headers.get('x-base-url')?.trim() ||
     process.env.LLM_BASE_URL?.trim() ||
     'https://api.deepseek.com/v1';
   const model = req.headers.get('x-model')?.trim() || process.env.LLM_MODEL?.trim() || 'deepseek-chat';
+
+  // 端点校验（防 SSRF）：仅 http/https 且非保留/元数据地址
+  let baseURL: string;
+  try {
+    baseURL = validateBaseURL(baseURLRaw);
+  } catch (e) {
+    return Response.json(
+      { error: e instanceof UnsafeBaseUrlError ? e.message : '端点地址无效' },
+      { status: 400 }
+    );
+  }
 
   const isLocal = /localhost|127\.0\.0\.1|0\.0\.0\.0/.test(baseURL);
   if (!apiKey && !isLocal) {

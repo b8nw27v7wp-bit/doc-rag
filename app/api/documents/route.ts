@@ -21,6 +21,7 @@ export async function DELETE(req: NextRequest) {
       .map((s) => Number(s.trim()))
       .filter((n) => Number.isFinite(n) && n > 0);
     if (ids.length === 0) return Response.json({ error: 'ids 参数无效' }, { status: 400 });
+    if (ids.length > 500) return Response.json({ error: '一次最多删除 500 份文档' }, { status: 400 });
     const deleted = deleteDocuments(ids);
     return Response.json({ ok: true, deleted });
   }

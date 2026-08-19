@@ -47,7 +47,7 @@ npm run dev                  # http://localhost:3000
 验证安装：
 
 ```bash
-npm test                     # 91 项单元测试
+npm test                     # 103 项单元测试
 npm run build && npm start   # 生产构建
 node scripts/verify-embed.mjs        # 验证本地嵌入模型
 node scripts/verify-api.mjs          # 端到端验收（需服务已启动）
@@ -120,7 +120,9 @@ docker compose up -d --build
 - 文档解析、分块、嵌入、检索全部在服务端进程本地完成，不经过任何第三方
 - API Key 仅存于浏览器 localStorage，通过 HTTPS 请求头直达所选服务商，服务端不落盘（`.env.local` 兜底 Key 可选配）
 - 数据库为单文件 `data/app.db`，删除即彻底清除
-- 部署到局域网时设置 `APP_PASSWORD` 即可设访问门槛
+- 部署到局域网/公网时设置 `APP_PASSWORD` 即可设访问门槛：cookie 由密码单向派生、不可伪造，且**页面与全部 API 同步受保护**（未认证 API 返回 401）
+- 防 SSRF：LLM 端点地址经校验，仅允许 http/https，阻断云元数据/保留地址
+- 登录接口限流（默认 60s 内 10 次），防暴力枚举
 
 ## 目录结构
 
@@ -160,6 +162,9 @@ lib/
   multiQuery.ts       # 查询改写提示 + 结果解析
   eval.ts             # 检索评估指标（Recall/Precision/MRR）
   hash.ts             # 内容哈希（重复检测）
+  auth.ts             # 密码门鉴权（cookie 密码派生 + 恒定时间比较）
+  ssrf.ts             # LLM 端点校验（防 SSRF）
+  rateLimit.ts        # 内存滑动窗口限流
   export.ts           # 会话 Markdown 导出
   db.ts               # node:sqlite 惰性初始化（WAL + 迁移，文档/块/会话/消息四表）
   llm.ts              # OpenAI 兼容流式 + 非流式调用（超时保护）

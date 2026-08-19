@@ -8,7 +8,7 @@ DocRAG 的测试分层：单元测试（`npm test`）+ 专项验证脚本（`scr
 npm test
 ```
 
-运行 `node --test`（91 项），覆盖：
+运行 `node --test`（103 项），覆盖：
 
 | 文件 | 覆盖点 |
 |---|---|
@@ -22,6 +22,9 @@ npm test
 | `tests/context.test.ts` | 邻块上下文扩展（首块/中间块/跨文档隔离/半径 0/多中心顺序） |
 | `tests/multiQuery.test.ts` | 查询改写提示组装、改写结果解析（编号/项目符号/回退/去重） |
 | `tests/eval.test.ts` | Recall@k / Precision@k / MRR 边界 |
+| `tests/auth.test.ts` | 密码派生 cookie、正确/错误/缺失校验、未启用放行 |
+| `tests/ssrf.test.ts` | 端点校验：放行 http/https/localhost/内网，阻断非 http 协议、元数据与保留地址、非法 URL |
+| `tests/rateLimit.test.ts` | 滑动窗口限流：超限拒绝、key 隔离、窗口过期恢复 |
 | `tests/hash.test.ts` | SHA-256 一致性、16 进制格式、文本/字节/Uint8Array 一致性 |
 | `tests/export.test.ts` | refs 归一化（数组/JSON/非法/空）、Markdown 渲染、单会话/多会话打包 |
 | `tests/rag.test.ts` | 引用编号提取、prompt 组装、**多轮历史注入与截断**、system prompt 规则 |

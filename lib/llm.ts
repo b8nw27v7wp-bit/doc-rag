@@ -2,6 +2,8 @@
  * LLM 流式层：OpenAI 兼容 chat/completions 流式调用。
  * 兼容 DeepSeek / GLM / Kimi / Ollama 本地模型等一切 OpenAI 协议端点。
  */
+import { validateBaseURL } from './ssrf';
+
 export interface LLMConfig {
   apiKey: string;
   baseURL: string;
@@ -29,7 +31,7 @@ export async function streamChat(
   const timeoutSignal = AbortSignal.timeout(timeoutMs);
   const combined = external ? AbortSignal.any([external, timeoutSignal]) : timeoutSignal;
 
-  const base = config.baseURL.replace(/\/+$/, '');
+  const base = validateBaseURL(config.baseURL);
   const res = await fetch(`${base}/chat/completions`, {
     method: 'POST',
     headers: {
@@ -101,7 +103,7 @@ export async function chatOnce(
   messages: ChatMsg[],
   timeoutMs = 30_000
 ): Promise<string> {
-  const base = config.baseURL.replace(/\/+$/, '');
+  const base = validateBaseURL(config.baseURL);
   const res = await fetch(`${base}/chat/completions`, {
     method: 'POST',
     headers: {
@@ -122,7 +124,8 @@ export async function chatOnce(
 /** 探测服务是否可达（设置面板/Ollama 状态用）：GET {base}/models */
 export async function reachable(config: Omit<LLMConfig, 'apiKey'>): Promise<boolean> {
   try {
-    const res = await fetch(`${config.baseURL.replace(/\/+$/, '')}/models`, {
+    const base = validateBaseURL(config.baseURL);
+    const res = await fetch(`${base}/models`, {
       signal: AbortSignal.timeout(3000),
     });
     return res.ok;
