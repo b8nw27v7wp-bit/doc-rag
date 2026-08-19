@@ -6,6 +6,7 @@ import {
   deleteSession,
   updateSessionTitle,
   updateSessionDocIds,
+  setSessionPinned,
   sessionCount,
 } from '@/lib/db';
 
@@ -29,10 +30,11 @@ export async function POST(req: NextRequest) {
 export async function PATCH(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const id = Number(searchParams.get('id'));
-  const body = (await req.json().catch(() => ({}))) as { title?: string; docIds?: number[] };
+  const body = (await req.json().catch(() => ({}))) as { title?: string; docIds?: number[]; pinned?: boolean };
   if (!id) return Response.json({ error: '缺少 id 参数' }, { status: 400 });
   if (body.title !== undefined) updateSessionTitle(id, body.title);
   if (body.docIds !== undefined) updateSessionDocIds(id, body.docIds);
+  if (body.pinned !== undefined) setSessionPinned(id, body.pinned);
   return Response.json({ ok: true });
 }
 

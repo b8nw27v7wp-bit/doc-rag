@@ -21,9 +21,9 @@
 - **MMR 多样性重排**：融合结果去冗余（同段落近似块只留信息量最大者），检索更全面
 - **邻块上下文扩展**：命中块自动并入同文档相邻块，回答更完整、少断章取义
 - 流式回答（NDJSON over fetch stream，带超时保护），回答标注 [n] 引用，点击查看原文出处段落
-- **多轮对话会话**：上下文随问答自动保存（SQLite），可随时回来继续；会话标题从首问自动生成（≤24 字）；**支持重命名与 Markdown 导出**
+- **多轮对话会话**：上下文随问答自动保存（SQLite），可随时回来继续；会话标题从首问自动生成（≤24 字）；**支持重命名、置顶、搜索与 Markdown 导出**
 - **按文档筛选检索范围**：每个会话可限定仅在指定文档内问答，多主题资料互不干扰
-- **文档库管理**：全文搜索（命中段落高亮切片）、批量删除、观察原文内容
+- **文档库管理**：全文搜索（命中段落高亮切片）、批量删除、查看原文内容、**自动标签 + LLM 摘要**
 - **CLI 批量导入**：`npm run import -- 目录/` 递归扫描本地文档入库，不经 HTTP，自动跳过重复文档
 - **REST API + 健康检查 + OpenAPI 文档**：`/api/openapi` 机器可读，`/api/health` 供探活/容器健康检查
 - 模型预设：DeepSeek / GLM / Kimi / Ollama / 自定义 OpenAI 兼容端点
@@ -47,7 +47,7 @@ npm run dev                  # http://localhost:3000
 验证安装：
 
 ```bash
-npm test                     # 103 项单元测试
+npm test                     # 114 项单元测试
 npm run build && npm start   # 生产构建
 node scripts/verify-embed.mjs        # 验证本地嵌入模型
 node scripts/verify-api.mjs          # 端到端验收（需服务已启动）
@@ -132,9 +132,10 @@ app/
   chat/page.tsx       # 问答页：会话侧栏 + 流式对话 + 引用 + 设置 + 导出
   lock/page.tsx       # 可选密码门
   error.tsx / not-found.tsx / loading.tsx  # 全局错误与加载边界
-  api/upload/         # 上传解析入库（限制 + 去重）
+  api/upload/         # 上传解析入库（限制 + 去重 + 标签）
   api/documents/      # 文档列表 / 单个或批量删除
   api/documents/content/  # 文档原文内容
+  api/documents/summarize/  # 文档摘要（可选 LLM）
   api/search/         # 全文搜索
   api/chat/           # RAG 流式问答（多轮历史 + 自动存档, NDJSON）
   api/sessions/       # 会话管理（列表/新建/重命名/删除）
@@ -144,8 +145,8 @@ app/
   api/health/         # 健康检查
   api/openapi/        # OpenAPI 3.1 文档
 components/
-  session-sidebar.tsx # 会话列表 + 重命名 + 文档范围筛选
-  doc-browser.tsx     # 文档浏览器（搜索/批量删除/原文查看）
+  session-sidebar.tsx # 会话列表 + 置顶/搜索/重命名 + 文档范围筛选
+  doc-browser.tsx     # 文档浏览器（搜索/批量删除/标签/摘要/原文查看）
   upload.tsx          # 拖拽上传（去重/跳过展示）
   nav.tsx             # 顶部导航
 proxy.ts              # 可选密码门（Next 16 proxy 约定）
@@ -162,6 +163,8 @@ lib/
   multiQuery.ts       # 查询改写提示 + 结果解析
   eval.ts             # 检索评估指标（Recall/Precision/MRR）
   hash.ts             # 内容哈希（重复检测）
+  keywords.ts         # 文档关键词提取（词频加权）
+  summarize.ts        # 文档摘要 prompt 组装
   auth.ts             # 密码门鉴权（cookie 密码派生 + 恒定时间比较）
   ssrf.ts             # LLM 端点校验（防 SSRF）
   rateLimit.ts        # 内存滑动窗口限流
@@ -185,6 +188,8 @@ docker-compose.yml    # 一键部署 + 数据卷 + 健康检查
 - [x] 会话重命名与 Markdown 导出
 - [x] MMR 多样性重排与邻块上下文（检索质量）
 - [x] 上下文检索 + 结构感知分块 + 多查询检索 + 检索评估
+- [x] 文档自动标签 + LLM 摘要
+- [x] 会话置顶 / 搜索
 - [x] REST API 文档（OpenAPI）与健康检查接口
 - [ ] 扫描件 PDF 的 OCR 支持
 - [ ] ANN 向量索引（万级块规模提速）

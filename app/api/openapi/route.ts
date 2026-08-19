@@ -10,7 +10,7 @@ const spec = {
   openapi: '3.1.0',
   info: {
     title: 'DocRAG API',
-    version: '0.5.0',
+    version: '0.6.0',
     description:
       '本地优先的 RAG 文档问答 API：上传文档、混合检索问答、会话管理、全文搜索与导出。',
   },
@@ -46,6 +46,16 @@ const spec = {
         summary: '文档原文内容',
         parameters: [{ name: 'id', in: 'query', required: true, schema: { type: 'integer' } }],
         responses: { '200': { description: '文档元信息与原文 text' }, '404': { description: '文档不存在' } },
+      },
+    },
+    '/api/documents/summarize': {
+      post: {
+        summary: '生成文档摘要（可选 LLM）',
+        requestBody: {
+          required: true,
+          content: { 'application/json': { schema: { type: 'object', properties: { id: { type: 'integer' } }, required: ['id'] } } },
+        },
+        responses: { '200': { description: '摘要文本' }, '400': { description: '参数/密钥缺失' } },
       },
     },
     '/api/search': {
@@ -85,7 +95,7 @@ const spec = {
     '/api/sessions': {
       get: { summary: '会话列表', responses: { '200': { description: '会话数组与 count' } } },
       post: { summary: '新建会话', requestBody: { content: { 'application/json': { schema: { type: 'object', properties: { title: { type: 'string' }, docIds: { type: 'array', items: { type: 'integer' } } } } } } }, responses: { '200': { description: '新建会话 id' } } },
-      patch: { summary: '更新会话标题 / 检索范围', parameters: [{ name: 'id', in: 'query', required: true, schema: { type: 'integer' } }], responses: { '200': { description: '更新结果' } } },
+      patch: { summary: '更新会话（标题/检索范围/置顶）', parameters: [{ name: 'id', in: 'query', required: true, schema: { type: 'integer' } }], responses: { '200': { description: '更新结果' } } },
       delete: { summary: '删除会话', parameters: [{ name: 'id', in: 'query', required: true, schema: { type: 'integer' } }], responses: { '200': { description: '删除结果' } } },
     },
     '/api/messages': {

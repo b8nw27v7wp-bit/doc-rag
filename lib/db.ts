@@ -14,6 +14,13 @@ mkdirSync(DATA_DIR, { recursive: true });
 
 let db: DatabaseSync | null = null;
 
+// 检索语料内存缓存：避免每次提问都重读 SQLite 并把嵌入 BLOB 反序列化为 Float32Array。
+// 文档增删时置空，下次访问重建。
+let chunkCache: ChunkRecord[] | null = null;
+function invalidateChunks(): void {
+  chunkCache = null;
+}
+
 function getDb(): DatabaseSync {
   if (!db) {
     const d = new DatabaseSync(path.join(DATA_DIR, 'app.db'));
@@ -29,6 +36,8 @@ CREATE TABLE IF NOT EXISTS documents (
   char_count   INTEGER NOT NULL,
   chunk_count  INTEGER NOT NULL,
   content_hash TEXT,
+  keywords     TEXT,
+  summary      TEXT,
   created_at   TEXT    NOT NULL DEFAULT (datetime('now', 'localtime')),
   updated_at   TEXT    NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
@@ -48,6 +57,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
   title      TEXT    NOT NULL DEFAULT '新会话',
   doc_ids    TEXT    NOT NULL DEFAULT '',
+  pinned     INTEGER NOT NULL DEFAULT 0,
   created_at TEXT    NOT NULL DEFAULT (datetime('now', 'localtime')),
   updated_at TEXT    NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
@@ -84,11 +94,23 @@ function migrate(d: DatabaseSync): void {
     d.exec('ALTER TABLE documents ADD COLUMN updated_at TEXT');
     d.exec("UPDATE documents SET updated_at = COALESCE(updated_at, created_at, '')");
   }
+  if (!docCols.has('keywords')) {
+    d.exec('ALTER TABLE documents ADD COLUMN keywords TEXT');
+  }
+  if (!docCols.has('summary')) {
+    d.exec('ALTER TABLE documents ADD COLUMN summary TEXT');
+  }
   const chunkCols = new Set(
     (d.prepare('PRAGMA table_info(chunks)').all() as { name: string }[]).map((c) => c.name)
   );
   if (!chunkCols.has('context')) {
     d.exec('ALTER TABLE chunks ADD COLUMN context TEXT');
+  }
+  const sessCols = new Set(
+    (d.prepare('PRAGMA table_info(sessions)').all() as { name: string }[]).map((c) => c.name)
+  );
+  if (!sessCols.has('pinned')) {
+    d.exec('ALTER TABLE sessions ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0');
   }
 }
 
@@ -100,6 +122,8 @@ export interface DocumentRecord {
   charCount: number;
   chunkCount: number;
   contentHash: string | null;
+  keywords: string[];
+  summary: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -119,21 +143,23 @@ function f32ToU8(v: Float32Array): Uint8Array {
   return new Uint8Array(v.buffer, v.byteOffset, v.byteLength);
 }
 
-/** 写入一个文档及其全部向量块，事务提交；contentHash 用于重复检测；context 为上下文头 */
+/** 写入一个文档及其全部向量块，事务提交；contentHash 用于重复检测；context 为上下文头；keywords 为标签 */
 export function insertDocument(
   name: string,
   ext: string,
   size: number,
   chunks: { text: string; vec: Float32Array; context?: string }[],
-  contentHash: string | null = null
+  contentHash: string | null = null,
+  keywords: string[] = []
 ): number {
   const d = getDb();
   const docId = Number(
     d
       .prepare(
-        'INSERT INTO documents (name, ext, size, char_count, chunk_count, content_hash) VALUES (?, ?, ?, ?, ?, ?)'
+        'INSERT INTO documents (name, ext, size, char_count, chunk_count, content_hash, keywords) VALUES (?, ?, ?, ?, ?, ?, ?)'
       )
-      .run(name, ext, size, chunks.reduce((a, c) => a + c.text.length, 0), chunks.length, contentHash).lastInsertRowid
+      .run(name, ext, size, chunks.reduce((a, c) => a + c.text.length, 0), chunks.length, contentHash, keywords.join(','))
+      .lastInsertRowid
   );
   const ins = d.prepare('INSERT INTO chunks (doc_id, idx, text, context, embedding) VALUES (?, ?, ?, ?, ?)');
   d.exec('BEGIN');
@@ -146,14 +172,24 @@ export function insertDocument(
     d.exec('ROLLBACK');
     throw e;
   }
+  invalidateChunks();
   return docId;
+}
+
+/** 逗号分隔的关键词列 → string[] */
+function parseKeywords(raw: string | null): string[] {
+  if (!raw) return [];
+  return raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
 }
 
 /** 文档列表（新上传在前） */
 export function listDocuments(): DocumentRecord[] {
   const rows = getDb()
     .prepare(
-      'SELECT id, name, ext, size, char_count, chunk_count, content_hash, created_at, updated_at FROM documents ORDER BY id DESC'
+      'SELECT id, name, ext, size, char_count, chunk_count, content_hash, keywords, summary, created_at, updated_at FROM documents ORDER BY id DESC'
     )
     .all() as unknown as {
     id: number;
@@ -163,6 +199,8 @@ export function listDocuments(): DocumentRecord[] {
     char_count: number;
     chunk_count: number;
     content_hash: string | null;
+    keywords: string | null;
+    summary: string | null;
     created_at: string;
     updated_at: string;
   }[];
@@ -174,6 +212,8 @@ export function listDocuments(): DocumentRecord[] {
     charCount: r.char_count,
     chunkCount: r.chunk_count,
     contentHash: r.content_hash,
+    keywords: parseKeywords(r.keywords),
+    summary: r.summary,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   }));
@@ -183,7 +223,7 @@ export function listDocuments(): DocumentRecord[] {
 export function getDocument(id: number): DocumentRecord | null {
   const row = getDb()
     .prepare(
-      'SELECT id, name, ext, size, char_count, chunk_count, content_hash, created_at, updated_at FROM documents WHERE id = ?'
+      'SELECT id, name, ext, size, char_count, chunk_count, content_hash, keywords, summary, created_at, updated_at FROM documents WHERE id = ?'
     )
     .get(id) as
     | {
@@ -194,6 +234,8 @@ export function getDocument(id: number): DocumentRecord | null {
         char_count: number;
         chunk_count: number;
         content_hash: string | null;
+        keywords: string | null;
+        summary: string | null;
         created_at: string;
         updated_at: string;
       }
@@ -207,6 +249,8 @@ export function getDocument(id: number): DocumentRecord | null {
     charCount: row.char_count,
     chunkCount: row.chunk_count,
     contentHash: row.content_hash,
+    keywords: parseKeywords(row.keywords),
+    summary: row.summary,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -217,6 +261,13 @@ export function documentCount(): number {
   return Number(row.n);
 }
 
+/** 写入/更新文档摘要（LLM 生成后回填） */
+export function setDocumentSummary(id: number, summary: string): void {
+  getDb()
+    .prepare("UPDATE documents SET summary = ?, updated_at = datetime('now', 'localtime') WHERE id = ?")
+    .run(summary.trim() || null, id);
+}
+
 export function chunkCount(): number {
   const row = getDb().prepare('SELECT COUNT(*) AS n FROM chunks').get() as { n: number };
   return Number(row.n);
@@ -225,6 +276,7 @@ export function chunkCount(): number {
 /** 删除文档（级联删除其向量块） */
 export function deleteDocument(id: number): void {
   getDb().prepare('DELETE FROM documents WHERE id = ?').run(id);
+  invalidateChunks();
 }
 
 /** 批量删除文档（级联删除向量块），返回实际删除数 */
@@ -232,6 +284,7 @@ export function deleteDocuments(ids: number[]): number {
   if (ids.length === 0) return 0;
   const placeholders = ids.map(() => '?').join(',');
   const res = getDb().prepare(`DELETE FROM documents WHERE id IN (${placeholders})`).run(...ids);
+  if (Number(res.changes) > 0) invalidateChunks();
   return Number(res.changes);
 }
 
@@ -305,8 +358,9 @@ export function makeSnippet(text: string, query: string, radius = 40): string {
   return `${prefix}${text.slice(start, end)}${suffix}`;
 }
 
-/** 全量向量块（含文档名，用于检索） */
+/** 全量向量块（含文档名，用于检索）；结果走内存缓存，文档增删后自动失效 */
 export function allChunks(): ChunkRecord[] {
+  if (chunkCache) return chunkCache;
   const rows = getDb()
     .prepare(
       `SELECT c.id, c.doc_id, d.name AS doc_name, c.idx, c.text, c.context, c.embedding
@@ -321,7 +375,7 @@ export function allChunks(): ChunkRecord[] {
     context: string | null;
     embedding: Uint8Array;
   }[];
-  return rows.map((r) => ({
+  chunkCache = rows.map((r) => ({
     id: r.id,
     docId: r.doc_id,
     docName: r.doc_name,
@@ -330,6 +384,7 @@ export function allChunks(): ChunkRecord[] {
     context: r.context,
     embedding: bytesToF32(r.embedding),
   }));
+  return chunkCache;
 }
 
 /** 数据库文件大小（README/页面展示用） */
@@ -348,6 +403,7 @@ export interface SessionRecord {
   title: string;
   /** 检索范围：空数组 = 全部文档 */
   docIds: number[];
+  pinned: boolean;
   createdAt: string;
   updatedAt: string;
   messageCount: number;
@@ -379,18 +435,19 @@ export function createSession(title: string, docIds: number[] = []): number {
   return Number(res.lastInsertRowid);
 }
 
-/** 会话列表（最近更新在前，附带消息数） */
+/** 会话列表（置顶在前，同组按最近更新排序，附带消息数） */
 export function listSessions(): SessionRecord[] {
   const rows = getDb()
     .prepare(
-      `SELECT s.id, s.title, s.doc_ids, s.created_at, s.updated_at,
+      `SELECT s.id, s.title, s.doc_ids, s.pinned, s.created_at, s.updated_at,
               (SELECT COUNT(*) FROM messages m WHERE m.session_id = s.id) AS message_count
-       FROM sessions s ORDER BY s.updated_at DESC, s.id DESC`
+       FROM sessions s ORDER BY s.pinned DESC, s.updated_at DESC, s.id DESC`
     )
     .all() as unknown as {
     id: number;
     title: string;
     doc_ids: string;
+    pinned: number;
     created_at: string;
     updated_at: string;
     message_count: number;
@@ -399,10 +456,16 @@ export function listSessions(): SessionRecord[] {
     id: r.id,
     title: r.title,
     docIds: parseDocIds(r.doc_ids),
+    pinned: Number(r.pinned) === 1,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
     messageCount: Number(r.message_count),
   }));
+}
+
+/** 置顶/取消置顶会话 */
+export function setSessionPinned(id: number, pinned: boolean): void {
+  getDb().prepare('UPDATE sessions SET pinned = ? WHERE id = ?').run(pinned ? 1 : 0, id);
 }
 
 export function getSession(id: number): { id: number; title: string; docIds: number[] } | null {

@@ -165,6 +165,18 @@ export default function ChatPage() {
     [sessions, refreshSessions]
   );
 
+  const togglePin = useCallback(
+    async (id: number, pinned: boolean) => {
+      await fetch(`/api/sessions?id=${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pinned }),
+      });
+      await refreshSessions();
+    },
+    [refreshSessions]
+  );
+
   const exportSession = useCallback(() => {
     const url = currentIdRef.current ? `/api/sessions/export?id=${currentIdRef.current}` : '/api/sessions/export';
     const a = document.createElement('a');
@@ -296,6 +308,7 @@ export default function ChatPage() {
         onSelect={(id) => void selectSession(id)}
         onDelete={(id) => void removeSession(id)}
         onRename={(id) => void renameSession(id)}
+        onPin={(id, pinned) => void togglePin(id, pinned)}
         onScopeChange={changeScope}
       />
 

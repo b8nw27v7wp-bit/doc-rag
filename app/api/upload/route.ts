@@ -6,6 +6,7 @@ import { embedTexts } from '@/lib/embed';
 import { insertDocument, findDocumentByHash } from '@/lib/db';
 import { contentHash } from '@/lib/hash';
 import { buildContext } from '@/lib/contextualize';
+import { topKeywords } from '@/lib/keywords';
 
 export const runtime = 'nodejs';
 
@@ -72,7 +73,8 @@ export async function POST(req: NextRequest) {
         parsed.ext,
         buf.length,
         structured.map((s, i) => ({ text: s.text, vec: vecs[i], context: contexts[i] })),
-        hash
+        hash,
+        topKeywords(parsed.text)
       );
       results.push({ ok: true, id, name: parsed.name, chars: parsed.charCount, chunks: total });
     } catch (e) {

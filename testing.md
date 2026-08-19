@@ -8,7 +8,7 @@ DocRAG 的测试分层：单元测试（`npm test`）+ 专项验证脚本（`scr
 npm test
 ```
 
-运行 `node --test`（103 项），覆盖：
+运行 `node --test`（114 项），覆盖：
 
 | 文件 | 覆盖点 |
 |---|---|
@@ -26,9 +26,11 @@ npm test
 | `tests/ssrf.test.ts` | 端点校验：放行 http/https/localhost/内网，阻断非 http 协议、元数据与保留地址、非法 URL |
 | `tests/rateLimit.test.ts` | 滑动窗口限流：超限拒绝、key 隔离、窗口过期恢复 |
 | `tests/hash.test.ts` | SHA-256 一致性、16 进制格式、文本/字节/Uint8Array 一致性 |
+| `tests/keywords.test.ts` | 关键词提取：高频优先、去重、词频排序、n 限制、空文本 |
+| `tests/summarize.test.ts` | 摘要 prompt 组装、超长截断 |
 | `tests/export.test.ts` | refs 归一化（数组/JSON/非法/空）、Markdown 渲染、单会话/多会话打包 |
 | `tests/rag.test.ts` | 引用编号提取、prompt 组装、**多轮历史注入与截断**、system prompt 规则 |
-| `tests/db.test.ts` | 会话 CRUD、docIds 范围存取、消息追加/级联删除、自动标题生成、**内容哈希去重、批量删除、原文重组、全文搜索与 LIKE 转义、迁移、上下文头存取**（隔离临时数据目录） |
+| `tests/db.test.ts` | 会话 CRUD、docIds 范围存取、置顶排序、消息追加/级联删除、自动标题生成、**内容哈希去重、批量删除、原文重组、全文搜索与 LIKE 转义、迁移、上下文头/关键词/摘要存取、内存缓存失效**（隔离临时数据目录） |
 
 ## 专项验收脚本
 

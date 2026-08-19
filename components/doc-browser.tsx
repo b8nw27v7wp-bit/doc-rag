@@ -11,6 +11,8 @@ export interface DocItem {
   charCount: number;
   chunkCount: number;
   createdAt: string;
+  keywords?: string[];
+  summary?: string | null;
 }
 
 interface SearchResult {
@@ -39,6 +41,8 @@ export default function DocBrowser({ docs }: { docs: DocItem[] }) {
   const [q, setQ] = useState('');
   const [results, setResults] = useState<SearchResult[] | null>(null);
   const [searching, setSearching] = useState(false);
+  const [summarizingId, setSummarizingId] = useState<number | null>(null);
+  const [summaryError, setSummaryError] = useState('');
 
   const allSelected = docs.length > 0 && selected.size === docs.length;
 
@@ -83,6 +87,37 @@ export default function DocBrowser({ docs }: { docs: DocItem[] }) {
       setViewLoading(false);
     }
   }, []);
+
+  const summarize = useCallback(
+    async (id: number) => {
+      setSummarizingId(id);
+      setSummaryError('');
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      try {
+        // 复用「问答页」保存的 BYOK 配置（同一 localStorage key）
+        const raw = localStorage.getItem('docrag.settings');
+        if (raw) {
+          const s = JSON.parse(raw) as { apiKey?: string; baseURL?: string; model?: string };
+          if (s.apiKey) headers['x-api-key'] = s.apiKey;
+          if (s.baseURL) headers['x-base-url'] = s.baseURL;
+          if (s.model) headers['x-model'] = s.model;
+        }
+      } catch {
+        // 忽略本地设置读取失败
+      }
+      try {
+        const res = await fetch('/api/documents/summarize', { method: 'POST', headers, body: JSON.stringify({ id }) });
+        const data = (await res.json().catch(() => null)) as { error?: string } | null;
+        if (!res.ok) throw new Error(data?.error || '摘要生成失败');
+        router.refresh();
+      } catch (e) {
+        setSummaryError(e instanceof Error ? e.message : '摘要生成失败');
+      } finally {
+        setSummarizingId(null);
+      }
+    },
+    [router]
+  );
 
   const search = useCallback(async () => {
     const query = q.trim();
@@ -131,6 +166,8 @@ export default function DocBrowser({ docs }: { docs: DocItem[] }) {
           {searching ? '搜索中…' : '搜索'}
         </button>
       </div>
+
+      {summaryError && <p className="text-[12px] text-[#d93025]">{summaryError}</p>}
 
       {/* 搜索结果 */}
       {results !== null && (
@@ -209,7 +246,25 @@ export default function DocBrowser({ docs }: { docs: DocItem[] }) {
                   <p className="text-[12px] text-[#86868b]">
                     {formatSize(d.size)} · {d.chunkCount} 块 · {d.charCount.toLocaleString()} 字 · {d.createdAt}
                   </p>
+                  {d.keywords && d.keywords.length > 0 && (
+                    <div className="mt-1 flex flex-wrap gap-1">
+                      {d.keywords.slice(0, 6).map((k) => (
+                        <span key={k} className="rounded-full bg-[#f5f5f7] px-2 py-0.5 text-[11px] text-[#6e6e73]">
+                          {k}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  {d.summary && <p className="mt-1 text-[12px] leading-relaxed text-[#86868b]">{d.summary}</p>}
                 </div>
+                <button
+                  onClick={() => void summarize(d.id)}
+                  disabled={summarizingId !== null}
+                  className="rounded-lg px-2 py-1 text-[13px] text-[#86868b] opacity-0 transition-opacity hover:bg-[#f5f5f7] hover:text-[#1d1d1f] group-hover:opacity-100 disabled:opacity-30"
+                  title={d.summary ? '重新生成摘要' : '用 LLM 生成一句话摘要'}
+                >
+                  {summarizingId === d.id ? '生成中…' : d.summary ? '重述' : '摘要'}
+                </button>
                 <button
                   onClick={() => void view(d.id)}
                   className="rounded-lg px-2 py-1 text-[13px] text-[#86868b] opacity-0 transition-opacity hover:bg-[#f5f5f7] hover:text-[#0057b8] group-hover:opacity-100"

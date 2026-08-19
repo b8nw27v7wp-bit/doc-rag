@@ -13,6 +13,8 @@ export default function HomePage() {
     charCount: d.charCount,
     chunkCount: d.chunkCount,
     createdAt: d.createdAt,
+    keywords: d.keywords,
+    summary: d.summary,
   }));
   const stats = {
     documents: documentCount(),

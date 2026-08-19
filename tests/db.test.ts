@@ -153,3 +153,36 @@ test('insertDocument 存储并还原 chunk 上下文头', () => {
   assert.ok(Math.abs(vec[0] - 0.1) < 1e-6, 'float32 往返近似一致');
   assert.ok(Math.abs(vec[1] - 0.2) < 1e-6);
 });
+
+test('insertDocument 存储关键词，setDocumentSummary 回填摘要', () => {
+  const id = db.insertDocument('关键词文档', 'md', 1, [{ text: '内容', vec: new Float32Array([0]) }], null, ['检索', '向量']);
+  const d = db.getDocument(id);
+  assert.deepEqual(d?.keywords, ['检索', '向量']);
+  assert.equal(d?.summary, null);
+  db.setDocumentSummary(id, '一句话摘要');
+  assert.equal(db.getDocument(id)?.summary, '一句话摘要');
+});
+
+test('setSessionPinned 置顶会话排在列表前', () => {
+  const a = db.createSession('普通会话');
+  const b = db.createSession('置顶会话');
+  db.setSessionPinned(b, true);
+  const list = db.listSessions();
+  const bi = list.findIndex((s) => s.id === b);
+  const ai = list.findIndex((s) => s.id === a);
+  assert.ok(bi >= 0 && ai >= 0, '两个会话都在列表中');
+  assert.ok(bi < ai, '置顶会话排在普通会话前');
+  assert.equal(list[bi].pinned, true);
+  assert.equal(list[ai].pinned, false);
+  // 取消置顶后恢复
+  db.setSessionPinned(b, false);
+  const list2 = db.listSessions();
+  assert.equal(list2.find((s) => s.id === b)?.pinned, false);
+});
+
+test('allChunks 内存缓存：未变更时同引用，变更后失效', () => {
+  const a = db.allChunks();
+  assert.strictEqual(a, db.allChunks(), '未变更时应返回同一缓存对象');
+  db.insertDocument('缓存失效', 'txt', 1, [{ text: 'x', vec: new Float32Array([0]) }]);
+  assert.notStrictEqual(a, db.allChunks(), '写入后缓存应失效重建');
+});

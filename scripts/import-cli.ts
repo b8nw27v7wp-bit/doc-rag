@@ -17,6 +17,7 @@ import { embedTexts } from '../lib/embed';
 import { insertDocument, documentCount, chunkCount, findDocumentByHash } from '../lib/db';
 import { contentHash } from '../lib/hash';
 import { buildContext } from '../lib/contextualize';
+import { topKeywords } from '../lib/keywords';
 
 /** 递归收集受支持的文件 */
 function collectFiles(targets: string[]): string[] {
@@ -89,7 +90,8 @@ async function main() {
         parsed.ext,
         buf.length,
         structured.map((s, i) => ({ text: s.text, vec: vecs[i], context: contexts[i] })),
-        hash
+        hash,
+        topKeywords(parsed.text)
       );
       ok++;
       totalChunks += total;
