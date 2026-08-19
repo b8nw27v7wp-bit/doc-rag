@@ -20,16 +20,23 @@ export interface HybridParams {
   k?: number;
   vectorMin?: number;
   rrfK?: number;
+  /** 可复用的 BM25 索引（多查询检索时避免重复分词） */
+  bm25?: BM25Index;
 }
 
 const RRF_K = 60;
+
+/** 从文本数组构建 BM25 索引（index 对应数组下标） */
+export function buildBM25Index(texts: string[]): BM25Index {
+  return new BM25Index(texts.map((text, index) => ({ index, text })));
+}
 
 export function hybridSearch(params: HybridParams): FusionHit[] {
   const k = params.k ?? 6;
   // 各检索器多取一些候选再融合（避免 top-k 截断漏掉单侧高排名项）
   const candidateN = Math.max(k * 3, 12);
   const vecHits = topK(params.embeddings, params.queryEmbedding, candidateN, params.vectorMin ?? 0.18);
-  const bm25 = new BM25Index(params.texts.map((text, index) => ({ index, text })));
+  const bm25 = params.bm25 ?? buildBM25Index(params.texts);
   const kwHits = bm25.search(params.query, candidateN);
   const rrfK = params.rrfK ?? RRF_K;
 

@@ -30,3 +30,13 @@ export function validateBaseURL(raw: string): string {
   }
   return u.toString().replace(/\/+$/, '');
 }
+
+/** 是否本地端点（Ollama 等本地模型，可免 Key） */
+export function isLocalBaseURL(baseURL: string): boolean {
+  try {
+    const host = new URL(baseURL).hostname.toLowerCase().replace(/^\[|\]$/g, '');
+    return host === 'localhost' || host === '127.0.0.1' || host === '::1';
+  } catch {
+    return false;
+  }
+}

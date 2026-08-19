@@ -60,12 +60,12 @@ export default function UploadDropzone() {
         }`}
       >
         <p className="text-[15px] font-medium">{busy ? '解析与嵌入中，首次运行需加载模型（约 30 秒）…' : '拖入文件到此处，或点击选择'}</p>
-        <p className="text-[12px] text-[#86868b]">支持 txt / md / pdf / docx，可多选。解析与向量化全部在本机完成。</p>
+        <p className="text-[12px] text-[#86868b]">支持 txt / md / pdf / docx / html / csv / tsv，可多选。解析与向量化全部在本机完成。</p>
         <input
           ref={inputRef}
           type="file"
           multiple
-          accept=".txt,.md,.markdown,.pdf,.docx"
+          accept=".txt,.md,.markdown,.pdf,.docx,.html,.htm,.csv,.tsv"
           className="hidden"
           onChange={(e) => void upload(e.target.files ?? [])}
         />

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { tokenize, BM25Index } from '../lib/bm25';
-import { hybridSearch } from '../lib/search';
+import { hybridSearch, buildBM25Index } from '../lib/search';
 
 function v(...xs: number[]): Float32Array {
   return new Float32Array(xs);
@@ -94,4 +94,23 @@ test('hybridSearch：全部不相关时返回空', () => {
     vectorMin: 0.5,
   });
   assert.deepEqual(hits, []);
+});
+
+test('hybridSearch：复用预建 BM25 索引结果一致', () => {
+  const embeddings = [v(1, 0, 0), v(0, 1, 0), v(0.95, 0.05, 0)];
+  const texts = ['这里完全没有查询词出现。', '贝尔不等式违反，量子纠缠被证实。', '另一个与查询语义接近但与关键词无关的段落。'];
+  const query = '贝尔不等式';
+  const qvec = v(0.9, 0.1, 0);
+  const withIndex = hybridSearch({
+    embeddings, texts, queryEmbedding: qvec, query, k: 3, vectorMin: 0.1,
+    bm25: buildBM25Index(texts),
+  });
+  const withoutIndex = hybridSearch({
+    embeddings, texts, queryEmbedding: qvec, query, k: 3, vectorMin: 0.1,
+  });
+  assert.deepEqual(
+    withIndex.map((h) => h.index),
+    withoutIndex.map((h) => h.index),
+    '预建索引与内置构建的排序应一致'
+  );
 });

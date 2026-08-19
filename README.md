@@ -13,7 +13,7 @@
 
 ## 功能
 
-- 拖拽上传 txt / md / pdf / docx，多文件批量入库（带内容哈希去重、单文件大小/数量限制）
+- 拖拽上传 txt / md / pdf / docx / html / csv / tsv，多文件批量入库（带内容哈希去重、单文件大小/数量限制）
 - **结构感知分块**：Markdown 标题层级切分并记录章节路径（600 字/块、120 字重叠，超长段落硬切兜底）
 - **上下文检索（Contextual Retrieval）**：嵌入前为每块拼接「文档名 · 章节 · 位置」上下文头，向量携带结构信息，语义召回更准
 - **混合检索**：向量语义 + BM25 关键词（中文 bigram 分词）RRF 融合 —— 专有名词/精确术语不再漏检，前端标注双分数
@@ -47,7 +47,7 @@ npm run dev                  # http://localhost:3000
 验证安装：
 
 ```bash
-npm test                     # 114 项单元测试
+npm test                     # 124 项单元测试
 npm run build && npm start   # 生产构建
 node scripts/verify-embed.mjs        # 验证本地嵌入模型
 node scripts/verify-api.mjs          # 端到端验收（需服务已启动）
@@ -93,7 +93,7 @@ docker compose up -d --build
 | 层 | 技术 | 说明 |
 |---|---|---|
 | 前端 | Next.js 16 (App Router) + Tailwind 4 | 浅色极简，无组件库，会话侧栏双栏布局 |
-| 解析 | pdf-parse / mammoth | 纯 JS 本地解析，支持 txt/md/pdf/docx |
+| 解析 | pdf-parse / mammoth / 内置 | 纯 JS 本地解析，支持 txt/md/pdf/docx/html/csv/tsv |
 | 嵌入 | @huggingface/transformers | 本地 ONNX 推理，q8 量化 |
 | 存储 | node:sqlite (内置) | 零原生依赖，单文件数据库，WAL 模式；文档/分块/会话/消息四表，分块带上下文头 |
 | 检索 | 混合检索 + 上下文检索 + 多查询 + MMR | 余弦 + BM25 经 RRF 融合，块嵌入带章节上下文；可选多查询改写增强召回，MMR 去冗余 |
@@ -165,6 +165,7 @@ lib/
   hash.ts             # 内容哈希（重复检测）
   keywords.ts         # 文档关键词提取（词频加权）
   summarize.ts        # 文档摘要 prompt 组装
+  llm-config.ts       # LLM 配置集中解析（BYOK/环境变量 + SSRF 校验）
   auth.ts             # 密码门鉴权（cookie 密码派生 + 恒定时间比较）
   ssrf.ts             # LLM 端点校验（防 SSRF）
   rateLimit.ts        # 内存滑动窗口限流

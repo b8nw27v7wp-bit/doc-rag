@@ -17,7 +17,7 @@ import {
   type ChunkRecord,
 } from '@/lib/db';
 import { embedText } from '@/lib/embed';
-import { hybridSearch, mergeMultiSearch, type FusionHit } from '@/lib/search';
+import { hybridSearch, mergeMultiSearch, buildBM25Index, type FusionHit } from '@/lib/search';
 import { mmrSelect, MMR_LAMBDA } from '@/lib/rerank';
 import { withNeighborContext } from '@/lib/context';
 import {
@@ -30,7 +30,8 @@ import {
 } from '@/lib/rag';
 import { streamChat, chatOnce, type ChatMsg } from '@/lib/llm';
 import { buildQueryExpansionPrompt, parseQueryLines, MAX_QUERIES } from '@/lib/multiQuery';
-import { validateBaseURL, UnsafeBaseUrlError } from '@/lib/ssrf';
+import { resolveLlmConfig, type ResolvedLlmConfig } from '@/lib/llm-config';
+import { isLocalBaseURL, UnsafeBaseUrlError } from '@/lib/ssrf';
 
 export const runtime = 'nodejs';
 
@@ -79,18 +80,10 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // 配置解析：请求头优先（BYOK），环境变量兜底
-  const apiKey = req.headers.get('x-api-key')?.trim() || process.env.LLM_API_KEY?.trim() || '';
-  const baseURLRaw =
-    req.headers.get('x-base-url')?.trim() ||
-    process.env.LLM_BASE_URL?.trim() ||
-    'https://api.deepseek.com/v1';
-  const model = req.headers.get('x-model')?.trim() || process.env.LLM_MODEL?.trim() || 'deepseek-chat';
-
-  // 端点校验（防 SSRF）：仅 http/https 且非保留/元数据地址
-  let baseURL: string;
+  // 配置解析：请求头优先（BYOK），环境变量兜底；baseURL 经 SSRF 校验
+  let cfg: ResolvedLlmConfig;
   try {
-    baseURL = validateBaseURL(baseURLRaw);
+    cfg = resolveLlmConfig(req);
   } catch (e) {
     return Response.json(
       { error: e instanceof UnsafeBaseUrlError ? e.message : '端点地址无效' },
@@ -98,8 +91,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const isLocal = /localhost|127\.0\.0\.1|0\.0\.0\.0/.test(baseURL);
-  if (!apiKey && !isLocal) {
+  if (!cfg.apiKey && !isLocalBaseURL(cfg.baseURL)) {
     return Response.json(
       { error: '未配置 API Key：请在问答页「设置」中填写，或在 .env.local 配置 LLM_API_KEY（Ollama 本地模型无需 Key）' },
       { status: 400 }
@@ -130,7 +122,7 @@ export async function POST(req: NextRequest) {
         const queries = [message];
         if (body.expand) {
           try {
-            const expanded = parseQueryLines(await chatOnce({ apiKey, baseURL, model }, buildQueryExpansionPrompt(message)));
+            const expanded = parseQueryLines(await chatOnce(cfg, buildQueryExpansionPrompt(message)));
             for (const q of expanded) if (!queries.includes(q)) queries.push(q);
           } catch {
             // 忽略：改写失败仍用原问题检索
@@ -139,6 +131,8 @@ export async function POST(req: NextRequest) {
 
         const embeddings = candidates.map((c) => c.embedding);
         const texts = candidates.map((c) => c.text);
+        // BM25 索引只建一次，跨查询复用（多查询检索不再重复分词）
+        const bm25 = buildBM25Index(texts);
         const fusedByQuery: FusionHit[][] = [];
         for (const q of queries.slice(0, MAX_QUERIES + 1)) {
           const qvec = await embedText(q);
@@ -149,6 +143,7 @@ export async function POST(req: NextRequest) {
             query: q,
             k: RAG_TOP_K * 3,
             vectorMin: RAG_MIN_SCORE,
+            bm25,
           });
           if (hits.length > 0) fusedByQuery.push(hits);
         }
@@ -197,12 +192,7 @@ export async function POST(req: NextRequest) {
         send({ type: 'session', id: sessionId });
 
         const messages = buildRagMessages(message, sources, history);
-        const answer = await streamChat(
-          { apiKey, baseURL, model },
-          messages,
-          (t) => send({ type: 'delta', text: t }),
-          req.signal
-        );
+        const answer = await streamChat(cfg, messages, (t) => send({ type: 'delta', text: t }), req.signal);
         answered = true;
         const refs = extractRefs(answer);
         send({ type: 'sources', sources, refs });
