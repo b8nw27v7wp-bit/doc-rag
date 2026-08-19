@@ -92,6 +92,33 @@ export async function streamChat(
   return full;
 }
 
+/**
+ * 非流式对话：单次返回完整回答（用于查询改写、标题生成等辅助调用）。
+ * @param timeoutMs 默认 30s
+ */
+export async function chatOnce(
+  config: LLMConfig,
+  messages: ChatMsg[],
+  timeoutMs = 30_000
+): Promise<string> {
+  const base = config.baseURL.replace(/\/+$/, '');
+  const res = await fetch(`${base}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${config.apiKey}`,
+    },
+    body: JSON.stringify({ model: config.model, messages, temperature: 0.2 }),
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`LLM 接口错误 ${res.status}: ${body.slice(0, 300)}`);
+  }
+  const json = (await res.json()) as { choices?: { message?: { content?: string } }[] };
+  return (json.choices?.[0]?.message?.content ?? '').trim();
+}
+
 /** 探测服务是否可达（设置面板/Ollama 状态用）：GET {base}/models */
 export async function reachable(config: Omit<LLMConfig, 'apiKey'>): Promise<boolean> {
   try {

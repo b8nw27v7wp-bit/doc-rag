@@ -12,10 +12,11 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { parseDocument, isSupported, supportedExts } from '../lib/parse';
-import { chunkText } from '../lib/chunk';
+import { chunkStructured } from '../lib/chunk';
 import { embedTexts } from '../lib/embed';
 import { insertDocument, documentCount, chunkCount, findDocumentByHash } from '../lib/db';
 import { contentHash } from '../lib/hash';
+import { buildContext } from '../lib/contextualize';
 
 /** 递归收集受支持的文件 */
 function collectFiles(targets: string[]): string[] {
@@ -78,19 +79,21 @@ async function main() {
         continue;
       }
       const parsed = await parseDocument(name, buf);
-      const chunks = chunkText(parsed.text);
-      if (chunks.length === 0) throw new Error('未能切分文本');
-      const vecs = await embedTexts(chunks);
+      const structured = chunkStructured(parsed.text);
+      if (structured.length === 0) throw new Error('未能切分文本');
+      const total = structured.length;
+      const contexts = structured.map((s, i) => buildContext(parsed.name, s.path, i, total));
+      const vecs = await embedTexts(structured.map((s, i) => `${contexts[i]}\n\n${s.text}`));
       const id = insertDocument(
         parsed.name,
         parsed.ext,
         buf.length,
-        chunks.map((text, i) => ({ text, vec: vecs[i] })),
+        structured.map((s, i) => ({ text: s.text, vec: vecs[i], context: contexts[i] })),
         hash
       );
       ok++;
-      totalChunks += chunks.length;
-      console.log(`  ok    ${parsed.name}  → ${chunks.length} 块 / ${parsed.charCount.toLocaleString()} 字 (id=${id})`);
+      totalChunks += total;
+      console.log(`  ok    ${parsed.name}  → ${total} 块 / ${parsed.charCount.toLocaleString()} 字 (id=${id})`);
     } catch (e) {
       failed++;
       console.log(`  FAIL  ${path.basename(file)}  ${e instanceof Error ? e.message : String(e)}`);

@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.5.0] - 2026-08-19
+
+### Added
+
+- 上下文检索（Contextual Retrieval）：嵌入前为每个分块拼接「文档名 · 章节 · 位置」上下文头，向量携带结构信息，语义召回更准（chunks 表新增 context 列，幂等迁移）
+- 结构感知分块：识别 Markdown 标题层级并按章节切分 + 记录标题路径（`chunkStructured`）
+- 多查询检索（Multi-Query RAG）：可选开启「查询增强」，先把问题改写成多条检索查询再合并（跨查询全局 RRF + MMR 去冗余），失败自动回退单查询
+- LLM 非流式调用 `chatOnce`（查询改写/辅助调用用，独立 30s 超时）
+- 检索评估：Recall@k / Precision@k / MRR 指标（`lib/eval.ts`）+ 离线评估脚本 `scripts/eval-retrieval.ts`
+- 单测新增 23 项（结构分块/上下文检索/多查询解析与合并/评估指标/chunk context 存取），共 91 项全绿
+
+### 已知限制
+
+- PDF 仅文本层解析；扫描件需先 OCR
+- 检索为全量暴力计算（向量余弦 + BM25），超大库（万级块）需引入 ANN
+- 查询增强依赖 LLM 可用，离线/未配 Key 时自动回退单查询检索
+- 嵌入模型首次使用需联网下载（约 112MB），国内网络依赖 hf-mirror 镜像
+- Dockerfile 因本机未装 Docker 未做镜像级验证（Node 环境已验证）
+
 ## [0.4.0] - 2026-08-19
 
 ### Added

@@ -1,10 +1,11 @@
 /** 上传解析：multipart → 解析 → 分块 → 本地嵌入 → 入库（支持多文件） */
 import { NextRequest } from 'next/server';
 import { parseDocument } from '@/lib/parse';
-import { chunkText } from '@/lib/chunk';
+import { chunkStructured } from '@/lib/chunk';
 import { embedTexts } from '@/lib/embed';
 import { insertDocument, findDocumentByHash } from '@/lib/db';
 import { contentHash } from '@/lib/hash';
+import { buildContext } from '@/lib/contextualize';
 
 export const runtime = 'nodejs';
 
@@ -60,18 +61,20 @@ export async function POST(req: NextRequest) {
         continue;
       }
       const parsed = await parseDocument(file.name, buf);
-      const chunks = chunkText(parsed.text);
-      if (chunks.length === 0) throw new Error('未能切分文本');
-      // 本地嵌入（首次调用会加载模型，约 30 秒，之后常驻内存）
-      const vecs = await embedTexts(chunks);
+      const structured = chunkStructured(parsed.text);
+      if (structured.length === 0) throw new Error('未能切分文本');
+      const total = structured.length;
+      // 上下文检索：embedding 文本 = 上下文头（文档名·章节·位置）+ 原文
+      const contexts = structured.map((s, i) => buildContext(parsed.name, s.path, i, total));
+      const vecs = await embedTexts(structured.map((s, i) => `${contexts[i]}\n\n${s.text}`));
       const id = insertDocument(
         parsed.name,
         parsed.ext,
         buf.length,
-        chunks.map((text, j) => ({ text, vec: vecs[j] })),
+        structured.map((s, i) => ({ text: s.text, vec: vecs[i], context: contexts[i] })),
         hash
       );
-      results.push({ ok: true, id, name: parsed.name, chars: parsed.charCount, chunks: chunks.length });
+      results.push({ ok: true, id, name: parsed.name, chars: parsed.charCount, chunks: total });
     } catch (e) {
       results.push({ ok: false, name: file.name, error: e instanceof Error ? e.message : String(e) });
     }

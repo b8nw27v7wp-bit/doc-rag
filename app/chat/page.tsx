@@ -24,6 +24,7 @@ interface Settings {
   baseURL: string;
   model: string;
   apiKey: string;
+  expand: boolean;
 }
 
 const PRESETS: Record<string, { baseURL: string; model: string; label: string }> = {
@@ -39,6 +40,7 @@ const DEFAULT_SETTINGS: Settings = {
   baseURL: PRESETS.deepseek.baseURL,
   model: PRESETS.deepseek.model,
   apiKey: '',
+  expand: false,
 };
 const LS_KEY = 'docrag.settings';
 
@@ -203,6 +205,7 @@ export default function ChatPage() {
         message: q,
         ...(currentIdRef.current ? { sessionId: currentIdRef.current } : {}),
         ...(scopeIds.length > 0 ? { docIds: scopeIds } : {}),
+        ...(settings.expand ? { expand: true } : {}),
       };
       const res = await fetch('/api/chat', {
         method: 'POST',
@@ -445,6 +448,19 @@ export default function ChatPage() {
                   )}
                 </div>
               </label>
+
+              <label className="flex items-center gap-2 text-[12px] font-medium">
+                <input
+                  type="checkbox"
+                  checked={settings.expand}
+                  onChange={(e) => setSettings((s) => ({ ...s, expand: e.target.checked }))}
+                  className="accent-[#1d1d1f]"
+                />
+                查询增强（多查询检索）
+              </label>
+              <p className="text-[12px] leading-relaxed text-[#86868b]">
+                开启后先把问题改写成多个检索查询再合并召回，复杂/模糊问题命中率更高；会额外发起一次模型调用、稍慢。
+              </p>
 
               {settings.provider === 'ollama' && (
                 <p className="text-[12px] text-[#86868b]">

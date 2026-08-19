@@ -56,3 +56,29 @@ export function hybridSearch(params: HybridParams): FusionHit[] {
     .sort((a, b) => b.rrf - a.rrf)
     .slice(0, k);
 }
+
+/**
+ * 多查询结果合并：对每个查询的融合结果再做一层全局 RRF，跨查询累积同一块排名。
+ * 用于多查询检索（query expansion）后汇总为一个候选列表，再交给 MMR 去重。
+ */
+export function mergeMultiSearch(allHits: FusionHit[][], k = 6, rrfK = RRF_K): FusionHit[] {
+  const agg = new Map<number, { rrf: number; vectorScore: number; keywordScore: number }>();
+  for (const hits of allHits) {
+    hits.forEach((h, rank) => {
+      const cur = agg.get(h.index) ?? { rrf: 0, vectorScore: 0, keywordScore: 0 };
+      cur.rrf += 1 / (rrfK + rank + 1);
+      cur.vectorScore = Math.max(cur.vectorScore, h.vectorScore);
+      cur.keywordScore = Math.max(cur.keywordScore, h.keywordScore);
+      agg.set(h.index, cur);
+    });
+  }
+  return [...agg.entries()]
+    .map(([index, v]) => ({
+      index,
+      vectorScore: Math.round(v.vectorScore * 100) / 100,
+      keywordScore: Math.round(v.keywordScore * 100) / 100,
+      rrf: v.rrf,
+    }))
+    .sort((a, b) => b.rrf - a.rrf)
+    .slice(0, k);
+}

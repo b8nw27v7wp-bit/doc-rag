@@ -14,8 +14,10 @@
 ## 功能
 
 - 拖拽上传 txt / md / pdf / docx，多文件批量入库（带内容哈希去重、单文件大小/数量限制）
-- 段落感知分块（600 字/块、120 字重叠，超长段落硬切兜底）
+- **结构感知分块**：Markdown 标题层级切分并记录章节路径（600 字/块、120 字重叠，超长段落硬切兜底）
+- **上下文检索（Contextual Retrieval）**：嵌入前为每块拼接「文档名 · 章节 · 位置」上下文头，向量携带结构信息，语义召回更准
 - **混合检索**：向量语义 + BM25 关键词（中文 bigram 分词）RRF 融合 —— 专有名词/精确术语不再漏检，前端标注双分数
+- **多查询检索（Multi-Query）**：可选，先把问题改写成多条检索查询并合并召回，复杂问题命中率更高（失败自动回退单查询）
 - **MMR 多样性重排**：融合结果去冗余（同段落近似块只留信息量最大者），检索更全面
 - **邻块上下文扩展**：命中块自动并入同文档相邻块，回答更完整、少断章取义
 - 流式回答（NDJSON over fetch stream，带超时保护），回答标注 [n] 引用，点击查看原文出处段落
@@ -45,10 +47,11 @@ npm run dev                  # http://localhost:3000
 验证安装：
 
 ```bash
-npm test                     # 68 项单元测试
+npm test                     # 91 项单元测试
 npm run build && npm start   # 生产构建
 node scripts/verify-embed.mjs        # 验证本地嵌入模型
 node scripts/verify-api.mjs          # 端到端验收（需服务已启动）
+npx tsx scripts/eval-retrieval.ts    # 检索质量离线评估（Recall/Precision/MRR）
 ```
 
 ### 命令行批量导入
@@ -92,8 +95,8 @@ docker compose up -d --build
 | 前端 | Next.js 16 (App Router) + Tailwind 4 | 浅色极简，无组件库，会话侧栏双栏布局 |
 | 解析 | pdf-parse / mammoth | 纯 JS 本地解析，支持 txt/md/pdf/docx |
 | 嵌入 | @huggingface/transformers | 本地 ONNX 推理，q8 量化 |
-| 存储 | node:sqlite (内置) | 零原生依赖，单文件数据库，WAL 模式；文档/分块/会话/消息四表 |
-| 检索 | 混合检索（余弦 + BM25，RRF 融合） | 向量语义 + 中文 bigram 关键词互补，专有名词不丢召回 |
+| 存储 | node:sqlite (内置) | 零原生依赖，单文件数据库，WAL 模式；文档/分块/会话/消息四表，分块带上下文头 |
+| 检索 | 混合检索 + 上下文检索 + 多查询 + MMR | 余弦 + BM25 经 RRF 融合，块嵌入带章节上下文；可选多查询改写增强召回，MMR 去冗余 |
 | LLM | OpenAI 兼容 chat/completions | BYOK 透传（x-api-key 请求头），多轮上下文注入 |
 | 部署 | Docker 多阶段 / CLI 批量导入 | 构建期预下载模型，数据卷持久化 |
 
@@ -146,23 +149,27 @@ components/
 proxy.ts              # 可选密码门（Next 16 proxy 约定）
 lib/
   parse.ts            # txt/md/pdf/docx 解析
-  chunk.ts            # 段落感知分块
+  chunk.ts            # 段落感知分块 + 结构感知分块（标题层级）
   embed.ts            # 本地嵌入（transformers.js 单例）
   vector.ts           # 余弦检索 + BLOB 转换
   bm25.ts             # BM25 关键词检索（中文 bigram）
-  search.ts           # 混合检索（RRF 融合）
+  search.ts           # 混合检索（RRF 融合）+ 多查询合并
   rerank.ts           # MMR 多样性重排
   context.ts          # 邻块上下文扩展
+  contextualize.ts    # 上下文检索（context head 拼接）
+  multiQuery.ts       # 查询改写提示 + 结果解析
+  eval.ts             # 检索评估指标（Recall/Precision/MRR）
   hash.ts             # 内容哈希（重复检测）
   export.ts           # 会话 Markdown 导出
   db.ts               # node:sqlite 惰性初始化（WAL + 迁移，文档/块/会话/消息四表）
-  llm.ts              # OpenAI 兼容流式调用（超时保护）
+  llm.ts              # OpenAI 兼容流式 + 非流式调用（超时保护）
   rag.ts              # prompt 组装（历史注入）+ 引用提取
-tests/                # node --test 单元测试（68 项）
+tests/                # node --test 单元测试（91 项）
 scripts/
   import-cli.ts       # CLI 批量导入（目录递归 + 去重）
   verify-embed.mjs    # 嵌入模型验证
   verify-api.mjs      # 端到端验收（上传→检索→会话全流程）
+  eval-retrieval.ts   # 检索质量离线评估（Recall/Precision/MRR）
 Dockerfile            # 多阶段构建（构建期预下载模型）
 docker-compose.yml    # 一键部署 + 数据卷 + 健康检查
 ```
@@ -171,10 +178,12 @@ docker-compose.yml    # 一键部署 + 数据卷 + 健康检查
 
 - [x] 全文搜索、批量删除与文档原文查看
 - [x] 会话重命名与 Markdown 导出
-- [x] MM 多样性重排与邻块上下文（检索质量）
+- [x] MMR 多样性重排与邻块上下文（检索质量）
+- [x] 上下文检索 + 结构感知分块 + 多查询检索 + 检索评估
 - [x] REST API 文档（OpenAPI）与健康检查接口
 - [ ] 扫描件 PDF 的 OCR 支持
 - [ ] ANN 向量索引（万级块规模提速）
+- [ ] 重排序模型（cross-encoder）接入
 - [ ] PDF 导出分享
 
 ## License

@@ -10,7 +10,7 @@ const spec = {
   openapi: '3.1.0',
   info: {
     title: 'DocRAG API',
-    version: '0.4.0',
+    version: '0.5.0',
     description:
       '本地优先的 RAG 文档问答 API：上传文档、混合检索问答、会话管理、全文搜索与导出。',
   },
@@ -61,7 +61,7 @@ const spec = {
     '/api/chat': {
       post: {
         summary: 'RAG 流式问答（NDJSON）',
-        description: '体含 message（必填）、sessionId（可选）、docIds（可选，限定检索范围）。响应为 NDJSON 事件流。',
+        description: '体含 message（必填）、sessionId（可选）、docIds（可选，限定检索范围）、expand（可选，多查询检索）。响应为 NDJSON 事件流。',
         requestBody: {
           required: true,
           content: {
@@ -72,6 +72,7 @@ const spec = {
                   message: { type: 'string' },
                   sessionId: { type: 'integer' },
                   docIds: { type: 'array', items: { type: 'integer' } },
+                  expand: { type: 'boolean', description: '是否启用查询改写+多查询检索' },
                 },
                 required: ['message'],
               },

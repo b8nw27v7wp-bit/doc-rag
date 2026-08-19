@@ -17,7 +17,7 @@ import {
   type ChunkRecord,
 } from '@/lib/db';
 import { embedText } from '@/lib/embed';
-import { hybridSearch } from '@/lib/search';
+import { hybridSearch, mergeMultiSearch, type FusionHit } from '@/lib/search';
 import { mmrSelect, MMR_LAMBDA } from '@/lib/rerank';
 import { withNeighborContext } from '@/lib/context';
 import {
@@ -28,7 +28,8 @@ import {
   HISTORY_LIMIT,
   type SourceHit,
 } from '@/lib/rag';
-import { streamChat, type ChatMsg } from '@/lib/llm';
+import { streamChat, chatOnce, type ChatMsg } from '@/lib/llm';
+import { buildQueryExpansionPrompt, parseQueryLines, MAX_QUERIES } from '@/lib/multiQuery';
 
 export const runtime = 'nodejs';
 
@@ -36,6 +37,8 @@ interface ChatBody {
   message?: string;
   sessionId?: number;
   docIds?: number[];
+  /** 是否启用多查询检索（LLM 改写，失败时自动回退单查询） */
+  expand?: boolean;
 }
 
 export async function POST(req: NextRequest) {
@@ -105,16 +108,35 @@ export async function POST(req: NextRequest) {
             return;
           }
         }
-        const qvec = await embedText(message);
-        // 混合检索：向量语义 + BM25 关键词，RRF 融合（多取候选供后续重排）
-        const fused = hybridSearch({
-          embeddings: candidates.map((c) => c.embedding),
-          texts: candidates.map((c) => c.text),
-          queryEmbedding: qvec,
-          query: message,
-          k: RAG_TOP_K * 3,
-          vectorMin: RAG_MIN_SCORE,
-        });
+        // 多查询检索（可选）：LLM 把问题改写成多个检索查询，失败时回退单查询
+        const queries = [message];
+        if (body.expand) {
+          try {
+            const expanded = parseQueryLines(await chatOnce({ apiKey, baseURL, model }, buildQueryExpansionPrompt(message)));
+            for (const q of expanded) if (!queries.includes(q)) queries.push(q);
+          } catch {
+            // 忽略：改写失败仍用原问题检索
+          }
+        }
+
+        const embeddings = candidates.map((c) => c.embedding);
+        const texts = candidates.map((c) => c.text);
+        const fusedByQuery: FusionHit[][] = [];
+        for (const q of queries.slice(0, MAX_QUERIES + 1)) {
+          const qvec = await embedText(q);
+          const hits = hybridSearch({
+            embeddings,
+            texts,
+            queryEmbedding: qvec,
+            query: q,
+            k: RAG_TOP_K * 3,
+            vectorMin: RAG_MIN_SCORE,
+          });
+          if (hits.length > 0) fusedByQuery.push(hits);
+        }
+
+        // 合并各查询结果（全局 RRF）
+        const fused = mergeMultiSearch(fusedByQuery, RAG_TOP_K * 3);
         if (fused.length === 0) {
           send({ type: 'error', message: '没有检索到与问题相关的资料，换个问法或补充文档试试' });
           return;

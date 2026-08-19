@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS chunks (
   doc_id    INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
   idx       INTEGER NOT NULL,
   text      TEXT    NOT NULL,
+  context   TEXT,
   embedding BLOB    NOT NULL
 );
 
@@ -73,15 +74,21 @@ CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, id);
  * ALTER TABLE 新增列不能用非恒定默认值，故 updated_at 先加空列再回填 created_at。
  */
 function migrate(d: DatabaseSync): void {
-  const cols = new Set(
+  const docCols = new Set(
     (d.prepare('PRAGMA table_info(documents)').all() as { name: string }[]).map((c) => c.name)
   );
-  if (!cols.has('content_hash')) {
+  if (!docCols.has('content_hash')) {
     d.exec('ALTER TABLE documents ADD COLUMN content_hash TEXT');
   }
-  if (!cols.has('updated_at')) {
+  if (!docCols.has('updated_at')) {
     d.exec('ALTER TABLE documents ADD COLUMN updated_at TEXT');
     d.exec("UPDATE documents SET updated_at = COALESCE(updated_at, created_at, '')");
+  }
+  const chunkCols = new Set(
+    (d.prepare('PRAGMA table_info(chunks)').all() as { name: string }[]).map((c) => c.name)
+  );
+  if (!chunkCols.has('context')) {
+    d.exec('ALTER TABLE chunks ADD COLUMN context TEXT');
   }
 }
 
@@ -103,6 +110,8 @@ export interface ChunkRecord {
   docName: string;
   idx: number;
   text: string;
+  /** 上下文头（contextual retrieval），可能为空 */
+  context: string | null;
   embedding: Float32Array;
 }
 
@@ -110,12 +119,12 @@ function f32ToU8(v: Float32Array): Uint8Array {
   return new Uint8Array(v.buffer, v.byteOffset, v.byteLength);
 }
 
-/** 写入一个文档及其全部向量块，事务提交；contentHash 用于重复检测 */
+/** 写入一个文档及其全部向量块，事务提交；contentHash 用于重复检测；context 为上下文头 */
 export function insertDocument(
   name: string,
   ext: string,
   size: number,
-  chunks: { text: string; vec: Float32Array }[],
+  chunks: { text: string; vec: Float32Array; context?: string }[],
   contentHash: string | null = null
 ): number {
   const d = getDb();
@@ -126,11 +135,11 @@ export function insertDocument(
       )
       .run(name, ext, size, chunks.reduce((a, c) => a + c.text.length, 0), chunks.length, contentHash).lastInsertRowid
   );
-  const ins = d.prepare('INSERT INTO chunks (doc_id, idx, text, embedding) VALUES (?, ?, ?, ?)');
+  const ins = d.prepare('INSERT INTO chunks (doc_id, idx, text, context, embedding) VALUES (?, ?, ?, ?, ?)');
   d.exec('BEGIN');
   try {
     for (let i = 0; i < chunks.length; i++) {
-      ins.run(docId, i, chunks[i].text, f32ToU8(chunks[i].vec));
+      ins.run(docId, i, chunks[i].text, chunks[i].context ?? null, f32ToU8(chunks[i].vec));
     }
     d.exec('COMMIT');
   } catch (e) {
@@ -300,7 +309,7 @@ export function makeSnippet(text: string, query: string, radius = 40): string {
 export function allChunks(): ChunkRecord[] {
   const rows = getDb()
     .prepare(
-      `SELECT c.id, c.doc_id, d.name AS doc_name, c.idx, c.text, c.embedding
+      `SELECT c.id, c.doc_id, d.name AS doc_name, c.idx, c.text, c.context, c.embedding
        FROM chunks c JOIN documents d ON d.id = c.doc_id`
     )
     .all() as unknown as {
@@ -309,6 +318,7 @@ export function allChunks(): ChunkRecord[] {
     doc_name: string;
     idx: number;
     text: string;
+    context: string | null;
     embedding: Uint8Array;
   }[];
   return rows.map((r) => ({
@@ -317,6 +327,7 @@ export function allChunks(): ChunkRecord[] {
     docName: r.doc_name,
     idx: r.idx,
     text: r.text,
+    context: r.context,
     embedding: bytesToF32(r.embedding),
   }));
 }

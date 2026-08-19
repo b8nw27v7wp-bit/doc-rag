@@ -140,3 +140,16 @@ test('makeSnippet 截取命中上下文', () => {
   assert.ok(s.includes('关键词'));
   assert.ok(s.length < text.length);
 });
+
+test('insertDocument 存储并还原 chunk 上下文头', () => {
+  const id = db.insertDocument('上下文文档', 'md', 1, [
+    { text: '块0', vec: new Float32Array([0.1, 0.2]), context: '《上下文文档》 · 第一章 · 第 1/1 段' },
+  ]);
+  const chunk = db.allChunks().find((c) => c.docId === id);
+  assert.ok(chunk);
+  assert.equal(chunk.context, '《上下文文档》 · 第一章 · 第 1/1 段');
+  assert.equal(chunk.text, '块0');
+  const vec = Array.from(chunk.embedding);
+  assert.ok(Math.abs(vec[0] - 0.1) < 1e-6, 'float32 往返近似一致');
+  assert.ok(Math.abs(vec[1] - 0.2) < 1e-6);
+});
