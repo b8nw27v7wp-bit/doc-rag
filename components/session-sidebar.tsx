@@ -23,6 +23,7 @@ interface Props {
   onNew: () => void;
   onSelect: (id: number) => void;
   onDelete: (id: number) => void;
+  onRename: (id: number) => void;
   onScopeChange: (ids: number[]) => void;
 }
 
@@ -34,6 +35,7 @@ export default function SessionSidebar({
   onNew,
   onSelect,
   onDelete,
+  onRename,
   onScopeChange,
 }: Props) {
   const [scopeOpen, setScopeOpen] = useState(false);
@@ -77,6 +79,13 @@ export default function SessionSidebar({
                     title={`${s.title}（${s.messageCount} 条消息）`}
                   >
                     {s.title}
+                  </button>
+                  <button
+                    onClick={() => onRename(s.id)}
+                    className="absolute right-7 hidden rounded-md px-1.5 py-0.5 text-[12px] text-[#86868b] hover:bg-white hover:text-[#1d1d1f] group-hover:block"
+                    title="重命名"
+                  >
+                    ✎
                   </button>
                   <button
                     onClick={() => onDelete(s.id)}

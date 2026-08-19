@@ -90,3 +90,53 @@ test('titleFromMessage 清理空白并按长度截断', () => {
   assert.equal(db.titleFromMessage('短问题'), '短问题');
   assert.equal(db.titleFromMessage('字'.repeat(30)).length, 25); // 24 字 + 省略号
 });
+
+test('insertDocument 记录 contentHash 供去重查询', () => {
+  const id = db.insertDocument('哈希文档', 'md', 10, [{ text: '内容', vec: new Float32Array([0.5]) }], 'abc123');
+  assert.equal(db.findDocumentByHash('哈希文档', 'abc123'), id);
+  assert.equal(db.findDocumentByHash('哈希文档', 'other'), null);
+  assert.equal(db.findDocumentByHash('别的文档', 'abc123'), null);
+});
+
+test('deleteDocuments 批量删除并返回删除数', () => {
+  const a = db.insertDocument('批量A', 'txt', 1, [{ text: 'a', vec: new Float32Array([0]) }]);
+  const b = db.insertDocument('批量B', 'txt', 1, [{ text: 'b', vec: new Float32Array([0]) }]);
+  const changed = db.deleteDocuments([a, b, 999999]);
+  assert.equal(changed, 2);
+  assert.equal(db.getDocument(a), null);
+  assert.equal(db.getDocument(b), null);
+});
+
+test('getDocumentText 按 idx 顺序重组全文', () => {
+  const id = db.insertDocument('重组', 'txt', 1, [
+    { text: '块0', vec: new Float32Array([0]) },
+    { text: '块1', vec: new Float32Array([0]) },
+    { text: '块2', vec: new Float32Array([0]) },
+  ]);
+  assert.equal(db.getDocumentText(id), '块0\n\n块1\n\n块2');
+});
+
+test('searchChunks 命中关键字并返回文档名与切片', () => {
+  const id = db.insertDocument('检索文档', 'md', 1, [{ text: '这是包含贝尔不等式实验验证的段落内容，用于全文检索测试。', vec: new Float32Array([0]) }]);
+  const hits = db.searchChunks('贝尔不等式', 10);
+  assert.ok(hits.some((h) => h.docId === id), '应命中刚入库的文档');
+  const hit = hits.find((h) => h.docId === id)!;
+  assert.equal(hit.docName, '检索文档');
+  assert.ok(hit.snippet.includes('贝尔不等式'));
+});
+
+test('searchChunks：LIKE 特殊字符转义（% 不被当作通配符）', () => {
+  const id = db.insertDocument('百分号', 'txt', 1, [{ text: '进度达到 100% 完成', vec: new Float32Array([0]) }]);
+  assert.equal(db.searchChunks('100%', 10).some((h) => h.docId === id), true);
+});
+
+test('searchChunks：空查询返回空', () => {
+  assert.deepEqual(db.searchChunks('   ', 10), []);
+});
+
+test('makeSnippet 截取命中上下文', () => {
+  const text = 'a'.repeat(50) + '关键词' + 'b'.repeat(50);
+  const s = db.makeSnippet(text, '关键词');
+  assert.ok(s.includes('关键词'));
+  assert.ok(s.length < text.length);
+});

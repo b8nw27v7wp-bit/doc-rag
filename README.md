@@ -13,16 +13,20 @@
 
 ## 功能
 
-- 拖拽上传 txt / md / pdf / docx，多文件批量入库
+- 拖拽上传 txt / md / pdf / docx，多文件批量入库（带内容哈希去重、单文件大小/数量限制）
 - 段落感知分块（600 字/块、120 字重叠，超长段落硬切兜底）
 - **混合检索**：向量语义 + BM25 关键词（中文 bigram 分词）RRF 融合 —— 专有名词/精确术语不再漏检，前端标注双分数
-- 流式回答（NDJSON over fetch stream），回答标注 [n] 引用，点击查看原文出处段落
-- **多轮对话会话**：上下文随问答自动保存（SQLite），可随时回来继续；会话标题从首问自动生成（≤24 字）
+- **MMR 多样性重排**：融合结果去冗余（同段落近似块只留信息量最大者），检索更全面
+- **邻块上下文扩展**：命中块自动并入同文档相邻块，回答更完整、少断章取义
+- 流式回答（NDJSON over fetch stream，带超时保护），回答标注 [n] 引用，点击查看原文出处段落
+- **多轮对话会话**：上下文随问答自动保存（SQLite），可随时回来继续；会话标题从首问自动生成（≤24 字）；**支持重命名与 Markdown 导出**
 - **按文档筛选检索范围**：每个会话可限定仅在指定文档内问答，多主题资料互不干扰
-- **CLI 批量导入**：`npm run import -- 目录/` 递归扫描本地文档入库，不经 HTTP
+- **文档库管理**：全文搜索（命中段落高亮切片）、批量删除、观察原文内容
+- **CLI 批量导入**：`npm run import -- 目录/` 递归扫描本地文档入库，不经 HTTP，自动跳过重复文档
+- **REST API + 健康检查 + OpenAPI 文档**：`/api/openapi` 机器可读，`/api/health` 供探活/容器健康检查
 - 模型预设：DeepSeek / GLM / Kimi / Ollama / 自定义 OpenAI 兼容端点
 - 可选访问密码（`APP_PASSWORD` 环境变量，适合部署到局域网）
-- **Docker 一键部署**（多阶段构建 + 数据卷持久化 + 构建期预下载嵌入模型）
+- **Docker 一键部署**（多阶段构建 + 数据卷持久化 + 构建期预下载嵌入模型 + 健康检查）
 
 ## 快速开始
 
@@ -41,7 +45,7 @@ npm run dev                  # http://localhost:3000
 验证安装：
 
 ```bash
-npm test                     # 31 项单元测试
+npm test                     # 68 项单元测试
 npm run build && npm start   # 生产构建
 node scripts/verify-embed.mjs        # 验证本地嵌入模型
 node scripts/verify-api.mjs          # 端到端验收（需服务已启动）
@@ -104,6 +108,8 @@ docker compose up -d --build
 | `EMBED_MODEL` | `Xenova/paraphrase-multilingual-MiniLM-L12-v2` | 可换其他 transformers.js 兼容模型 |
 | `EMBED_DTYPE` | `q8` | 量化精度 |
 | `DATA_DIR` | `./data` | SQLite 数据目录 |
+| `MAX_UPLOAD_MB` | `50` | 单文件上传大小上限 |
+| `MAX_FILES` | `20` | 单次上传文件数上限 |
 | `APP_PASSWORD` | - | 设置后启用访问密码门 |
 
 ## 隐私与安全
@@ -117,42 +123,59 @@ docker compose up -d --build
 
 ```
 app/
-  page.tsx            # 首页：上传 + 文档库
-  chat/page.tsx       # 问答页：会话侧栏 + 流式对话 + 引用 + 设置
+  page.tsx            # 首页：上传 + 文档库（搜索 / 批量删除 / 查看原文）
+  chat/page.tsx       # 问答页：会话侧栏 + 流式对话 + 引用 + 设置 + 导出
   lock/page.tsx       # 可选密码门
-  api/upload/         # 上传解析入库
-  api/documents/      # 文档列表 / 删除
+  error.tsx / not-found.tsx / loading.tsx  # 全局错误与加载边界
+  api/upload/         # 上传解析入库（限制 + 去重）
+  api/documents/      # 文档列表 / 单个或批量删除
+  api/documents/content/  # 文档原文内容
+  api/search/         # 全文搜索
   api/chat/           # RAG 流式问答（多轮历史 + 自动存档, NDJSON）
   api/sessions/       # 会话管理（列表/新建/重命名/删除）
+  api/sessions/export/   # 会话导出 Markdown
   api/messages/       # 会话消息恢复（含引用重放）
   api/lock/           # 密码校验
+  api/health/         # 健康检查
+  api/openapi/        # OpenAPI 3.1 文档
 components/
-  session-sidebar.tsx # 会话列表 + 文档范围筛选
-  upload.tsx          # 拖拽上传
+  session-sidebar.tsx # 会话列表 + 重命名 + 文档范围筛选
+  doc-browser.tsx     # 文档浏览器（搜索/批量删除/原文查看）
+  upload.tsx          # 拖拽上传（去重/跳过展示）
   nav.tsx             # 顶部导航
+proxy.ts              # 可选密码门（Next 16 proxy 约定）
 lib/
   parse.ts            # txt/md/pdf/docx 解析
   chunk.ts            # 段落感知分块
   embed.ts            # 本地嵌入（transformers.js 单例）
   vector.ts           # 余弦检索 + BLOB 转换
-  db.ts               # node:sqlite 惰性初始化（WAL，文档/块/会话/消息四表）
-  llm.ts              # OpenAI 兼容流式调用
+  bm25.ts             # BM25 关键词检索（中文 bigram）
+  search.ts           # 混合检索（RRF 融合）
+  rerank.ts           # MMR 多样性重排
+  context.ts          # 邻块上下文扩展
+  hash.ts             # 内容哈希（重复检测）
+  export.ts           # 会话 Markdown 导出
+  db.ts               # node:sqlite 惰性初始化（WAL + 迁移，文档/块/会话/消息四表）
+  llm.ts              # OpenAI 兼容流式调用（超时保护）
   rag.ts              # prompt 组装（历史注入）+ 引用提取
-tests/                # node --test 单元测试（31 项）
+tests/                # node --test 单元测试（68 项）
 scripts/
-  import-cli.ts       # CLI 批量导入（目录递归）
+  import-cli.ts       # CLI 批量导入（目录递归 + 去重）
   verify-embed.mjs    # 嵌入模型验证
   verify-api.mjs      # 端到端验收（上传→检索→会话全流程）
 Dockerfile            # 多阶段构建（构建期预下载模型）
-docker-compose.yml    # 一键部署 + 数据卷
+docker-compose.yml    # 一键部署 + 数据卷 + 健康检查
 ```
 
 ## 路线图
 
-- [ ] 文档全文搜索与批量删除管理
+- [x] 全文搜索、批量删除与文档原文查看
+- [x] 会话重命名与 Markdown 导出
+- [x] MM 多样性重排与邻块上下文（检索质量）
+- [x] REST API 文档（OpenAPI）与健康检查接口
 - [ ] 扫描件 PDF 的 OCR 支持
-- [ ] 会话导出（Markdown/PDF 分享）
-- [ ] REST API 文档（OpenAPI）供第三方集成
+- [ ] ANN 向量索引（万级块规模提速）
+- [ ] PDF 导出分享
 
 ## License
 

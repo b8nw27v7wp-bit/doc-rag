@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.4.0] - 2026-08-19
+
+### Added
+
+- 检索质量：MMR（Maximal Marginal Relevance）多样性重排，融合结果去冗余；邻块上下文扩展，命中块自动并入同文档相邻块，答案更完整
+- 内容哈希去重：上传与 CLI 导入均对重复文档（同名同内容）自动跳过，避免向量库膨胀
+- 文档库管理：全文搜索（命中段落切片高亮）、批量删除、查看原文内容（`/api/documents/content`、`/api/search`）
+- 会话增强：前端重命名 + Markdown 导出（单个或全部会话，`/api/sessions/export`）
+- REST 完整性：健康检查 `/api/health`（供探活/容器 healthcheck）、OpenAPI 3.1 文档 `/api/openapi`
+- 上传防护：单文件大小上限（`MAX_UPLOAD_MB`，默认 50MB）与单次文件数上限（`MAX_FILES`，默认 20）
+- LLM 调用超时保护（默认 120s），超时给出明确错误而非无限挂起
+- 数据层迁移：documents 表新增 `content_hash` / `updated_at` 列（幂等 ALTER，老库自动补齐）
+- 工程健壮性：全局 error / not-found / loading 边界；middleware 迁移为 Next 16 `proxy.ts`；Docker healthcheck
+- 单测新增 29 项（哈希/MMR/邻块上下文/Markdown 导出/迁移/去重/批量删除/全文搜索），共 68 项全绿
+
+### 已知限制
+
+- PDF 仅文本层解析；扫描件需先 OCR
+- 检索为全量暴力计算（向量余弦 + BM25），超大库（万级块）需引入 ANN
+- 嵌入模型首次使用需联网下载（约 112MB），国内网络依赖 hf-mirror 镜像
+- Dockerfile 因本机未装 Docker 未做镜像级验证（Node 环境已验证）
+
 ## [0.3.0] - 2026-08-18
 
 ### Added

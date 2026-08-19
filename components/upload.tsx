@@ -8,6 +8,7 @@ interface UploadItem {
   name: string;
   chars?: number;
   chunks?: number;
+  skipped?: boolean;
   error?: string;
 }
 
@@ -79,6 +80,8 @@ export default function UploadDropzone() {
                 <span className="shrink-0 text-[#34a853]">
                   已入库 · {r.chunks} 块 · {r.chars} 字
                 </span>
+              ) : r.skipped ? (
+                <span className="shrink-0 text-[#86868b]">{r.error || '已跳过'}</span>
               ) : (
                 <span className="shrink-0 text-[#d93025]">{r.error || '失败'}</span>
               )}

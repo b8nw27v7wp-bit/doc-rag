@@ -14,7 +14,8 @@ import path from 'node:path';
 import { parseDocument, isSupported, supportedExts } from '../lib/parse';
 import { chunkText } from '../lib/chunk';
 import { embedTexts } from '../lib/embed';
-import { insertDocument, documentCount, chunkCount } from '../lib/db';
+import { insertDocument, documentCount, chunkCount, findDocumentByHash } from '../lib/db';
+import { contentHash } from '../lib/hash';
 
 /** 递归收集受支持的文件 */
 function collectFiles(targets: string[]): string[] {
@@ -62,12 +63,21 @@ async function main() {
   const t0 = Date.now();
   let ok = 0;
   let failed = 0;
+  let skipped = 0;
   let totalChunks = 0;
 
   for (const file of files) {
     try {
       const buf = readFileSync(file);
-      const parsed = await parseDocument(path.basename(file), buf);
+      const name = path.basename(file);
+      const hash = contentHash(buf);
+      const dupId = findDocumentByHash(name, hash);
+      if (dupId !== null) {
+        skipped++;
+        console.log(`  skip  ${name}  （与现有文档 id=${dupId} 相同，已跳过）`);
+        continue;
+      }
+      const parsed = await parseDocument(name, buf);
       const chunks = chunkText(parsed.text);
       if (chunks.length === 0) throw new Error('未能切分文本');
       const vecs = await embedTexts(chunks);
@@ -75,7 +85,8 @@ async function main() {
         parsed.name,
         parsed.ext,
         buf.length,
-        chunks.map((text, i) => ({ text, vec: vecs[i] }))
+        chunks.map((text, i) => ({ text, vec: vecs[i] })),
+        hash
       );
       ok++;
       totalChunks += chunks.length;
@@ -87,7 +98,7 @@ async function main() {
   }
 
   console.log(
-    `\n完成：成功 ${ok} / 失败 ${failed}，新增 ${totalChunks} 向量块，耗时 ${((Date.now() - t0) / 1000).toFixed(1)}s\n` +
+    `\n完成：成功 ${ok} / 失败 ${failed} / 跳过 ${skipped}，新增 ${totalChunks} 向量块，耗时 ${((Date.now() - t0) / 1000).toFixed(1)}s\n` +
       `当前库：${documentCount()} 份文档 / ${chunkCount().toLocaleString()} 个向量块`
   );
   process.exit(failed > 0 && ok === 0 ? 1 : 0);

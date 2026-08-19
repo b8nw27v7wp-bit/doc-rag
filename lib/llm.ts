@@ -16,13 +16,19 @@ export interface ChatMsg {
 /**
  * 流式对话。onDelta 逐段回调累积文本，返回完整回答。
  * 解析 SSE（data: {...} → delta.content），兼容 [DONE] 结束标记。
+ * @param timeoutMs 单次调用总超时（默认 120s）；超时抛「生成超时」，外部主动中止抛 AbortError
  */
 export async function streamChat(
   config: LLMConfig,
   messages: ChatMsg[],
   onDelta: (text: string) => void,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  timeoutMs = 120_000
 ): Promise<string> {
+  const external = signal;
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  const combined = external ? AbortSignal.any([external, timeoutSignal]) : timeoutSignal;
+
   const base = config.baseURL.replace(/\/+$/, '');
   const res = await fetch(`${base}/chat/completions`, {
     method: 'POST',
@@ -36,7 +42,7 @@ export async function streamChat(
       stream: true,
       temperature: 0.3,
     }),
-    signal,
+    signal: combined,
   });
 
   if (!res.ok) {
@@ -49,30 +55,39 @@ export async function streamChat(
   let full = '';
   let buf = '';
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += decoder.decode(value, { stream: true });
-    let idx: number;
-    while ((idx = buf.indexOf('\n')) >= 0) {
-      const line = buf.slice(0, idx).trim();
-      buf = buf.slice(idx + 1);
-      if (!line.startsWith('data:')) continue;
-      const payload = line.slice(5).trim();
-      if (payload === '[DONE]') continue;
-      try {
-        const json = JSON.parse(payload) as {
-          choices?: { delta?: { content?: string } }[];
-        };
-        const delta = json.choices?.[0]?.delta?.content;
-        if (delta) {
-          full += delta;
-          onDelta(delta);
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let idx: number;
+      while ((idx = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, idx).trim();
+        buf = buf.slice(idx + 1);
+        if (!line.startsWith('data:')) continue;
+        const payload = line.slice(5).trim();
+        if (payload === '[DONE]') continue;
+        try {
+          const json = JSON.parse(payload) as {
+            choices?: { delta?: { content?: string } }[];
+          };
+          const delta = json.choices?.[0]?.delta?.content;
+          if (delta) {
+            full += delta;
+            onDelta(delta);
+          }
+        } catch {
+          // 忽略无法解析的帧
         }
-      } catch {
-        // 忽略无法解析的帧
       }
     }
+  } catch (e) {
+    // 外部主动中止（用户点停止）→ 原样抛 AbortError，由调用方按取消处理
+    if (external?.aborted) throw e;
+    if (timeoutSignal.aborted && !external?.aborted) {
+      throw new Error('生成超时，请重试或缩短问题');
+    }
+    throw e;
   }
   return full;
 }

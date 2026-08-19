@@ -3,9 +3,14 @@ import { NextRequest } from 'next/server';
 import { parseDocument } from '@/lib/parse';
 import { chunkText } from '@/lib/chunk';
 import { embedTexts } from '@/lib/embed';
-import { insertDocument } from '@/lib/db';
+import { insertDocument, findDocumentByHash } from '@/lib/db';
+import { contentHash } from '@/lib/hash';
 
 export const runtime = 'nodejs';
+
+const MAX_FILES = Number(process.env.MAX_FILES) || 20;
+const MAX_UPLOAD_MB = Number(process.env.MAX_UPLOAD_MB) || 50;
+const MAX_BYTES = MAX_UPLOAD_MB * 1024 * 1024;
 
 interface UploadResult {
   ok: boolean;
@@ -13,6 +18,8 @@ interface UploadResult {
   id?: number;
   chars?: number;
   chunks?: number;
+  /** 重复文档跳过（不算失败） */
+  skipped?: boolean;
   error?: string;
 }
 
@@ -33,9 +40,25 @@ export async function POST(req: NextRequest) {
   }
 
   const results: UploadResult[] = [];
-  for (const file of files) {
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
+    if (i >= MAX_FILES) {
+      results.push({ ok: false, name: file.name, error: `超出单次上传文件数上限（${MAX_FILES} 个），已忽略` });
+      continue;
+    }
+    if (file.size > MAX_BYTES) {
+      results.push({ ok: false, name: file.name, error: `文件超过大小上限 ${MAX_UPLOAD_MB}MB` });
+      continue;
+    }
     try {
       const buf = Buffer.from(await file.arrayBuffer());
+      const hash = contentHash(buf);
+      // 重复检测：同名同内容不重复入库
+      const dupId = findDocumentByHash(file.name, hash);
+      if (dupId !== null) {
+        results.push({ ok: false, skipped: true, name: file.name, error: `重复文档，已存在（id=${dupId}）` });
+        continue;
+      }
       const parsed = await parseDocument(file.name, buf);
       const chunks = chunkText(parsed.text);
       if (chunks.length === 0) throw new Error('未能切分文本');
@@ -45,7 +68,8 @@ export async function POST(req: NextRequest) {
         parsed.name,
         parsed.ext,
         buf.length,
-        chunks.map((text, i) => ({ text, vec: vecs[i] }))
+        chunks.map((text, j) => ({ text, vec: vecs[j] })),
+        hash
       );
       results.push({ ok: true, id, name: parsed.name, chars: parsed.charCount, chunks: chunks.length });
     } catch (e) {
@@ -53,6 +77,8 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  const failed = results.filter((r) => !r.ok).length;
-  return Response.json({ results, failed }, { status: failed === results.length ? 422 : 200 });
+  const okCount = results.filter((r) => r.ok).length;
+  const failed = results.filter((r) => !r.ok && !r.skipped).length;
+  const skipped = results.filter((r) => r.skipped).length;
+  return Response.json({ results, failed, skipped }, { status: okCount === 0 ? 422 : 200 });
 }

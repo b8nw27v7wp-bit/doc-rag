@@ -86,7 +86,10 @@ export default function ChatPage() {
 
   // 初始化：会话列表 + 文档列表
   useEffect(() => {
-    void refreshSessions();
+    fetch('/api/sessions')
+      .then((r) => r.json())
+      .then((d) => setSessions(d.sessions ?? []))
+      .catch(() => {});
     fetch('/api/documents')
       .then((r) => r.json())
       .then((d) => {
@@ -95,7 +98,7 @@ export default function ChatPage() {
         setDocCount(list.length);
       })
       .catch(() => setDocCount(0));
-  }, [refreshSessions]);
+  }, []);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -144,6 +147,31 @@ export default function ChatPage() {
     }
     await refreshSessions();
   }, [refreshSessions]);
+
+  const renameSession = useCallback(
+    async (id: number) => {
+      const cur = sessions.find((s) => s.id === id)?.title ?? '';
+      const next = window.prompt('重命名会话', cur);
+      if (next === null || next.trim() === '' || next === cur) return;
+      await fetch(`/api/sessions?id=${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: next }),
+      });
+      await refreshSessions();
+    },
+    [sessions, refreshSessions]
+  );
+
+  const exportSession = useCallback(() => {
+    const url = currentIdRef.current ? `/api/sessions/export?id=${currentIdRef.current}` : '/api/sessions/export';
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = '';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }, []);
 
   const changeScope = useCallback(
     (ids: number[]) => {
@@ -264,6 +292,7 @@ export default function ChatPage() {
         onNew={() => void newChat()}
         onSelect={(id) => void selectSession(id)}
         onDelete={(id) => void removeSession(id)}
+        onRename={(id) => void renameSession(id)}
         onScopeChange={changeScope}
       />
 
@@ -280,12 +309,21 @@ export default function ChatPage() {
                   : '新对话 · 提问将自动保存'
               : sessions.find((s) => s.id === currentId)?.title ?? '会话'}
           </p>
-          <button
-            onClick={() => setSettingsOpen(true)}
-            className="ml-4 shrink-0 rounded-lg px-3 py-1.5 text-[13px] text-[#1d1d1f] transition-colors hover:bg-[#f5f5f7]"
-          >
-            模型设置 · {PRESETS[settings.provider]?.label ?? settings.provider} · {maskKey(settings.apiKey)}
-          </button>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={exportSession}
+              className="rounded-lg px-3 py-1.5 text-[13px] text-[#1d1d1f] transition-colors hover:bg-[#f5f5f7]"
+              title={currentId === null ? '导出全部会话为 Markdown' : '导出当前会话为 Markdown'}
+            >
+              导出
+            </button>
+            <button
+              onClick={() => setSettingsOpen(true)}
+              className="ml-1 shrink-0 rounded-lg px-3 py-1.5 text-[13px] text-[#1d1d1f] transition-colors hover:bg-[#f5f5f7]"
+            >
+              模型设置 · {PRESETS[settings.provider]?.label ?? settings.provider} · {maskKey(settings.apiKey)}
+            </button>
+          </div>
         </div>
 
         {/* 消息区 */}

@@ -1,7 +1,7 @@
-/** 可选密码门中间件：设置 APP_PASSWORD 后保护全部页面（API 除外） */
+/** 可选密码门代理：设置 APP_PASSWORD 后保护全部页面（API 除外） */
 import { NextResponse, type NextRequest } from 'next/server';
 
-export function middleware(req: NextRequest) {
+export function proxy(req: NextRequest) {
   if (!process.env.APP_PASSWORD) return NextResponse.next();
   const { pathname } = req.nextUrl;
   if (pathname.startsWith('/api') || pathname.startsWith('/_next') || pathname.startsWith('/lock')) {

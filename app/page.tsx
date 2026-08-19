@@ -1,11 +1,19 @@
 import { listDocuments, documentCount, chunkCount, dbSizeBytes } from '@/lib/db';
 import UploadDropzone from '@/components/upload';
-import DocRow from '@/components/doc-row';
+import DocBrowser from '@/components/doc-browser';
 
 export const dynamic = 'force-dynamic';
 
 export default function HomePage() {
-  const docs = listDocuments();
+  const docs = listDocuments().map((d) => ({
+    id: d.id,
+    name: d.name,
+    ext: d.ext,
+    size: d.size,
+    charCount: d.charCount,
+    chunkCount: d.chunkCount,
+    createdAt: d.createdAt,
+  }));
   const stats = {
     documents: documentCount(),
     chunks: chunkCount().toLocaleString(),
@@ -36,15 +44,7 @@ export default function HomePage() {
 
       <section className="flex flex-col">
         <h2 className="mb-2 text-[15px] font-medium">文档库</h2>
-        {docs.length === 0 ? (
-          <p className="py-6 text-[13px] text-[#86868b]">暂无文档，拖入文件开始。</p>
-        ) : (
-          <ul className="divide-y divide-[#f0f0f2]">
-            {docs.map((d) => (
-              <DocRow key={d.id} doc={d} />
-            ))}
-          </ul>
-        )}
+        <DocBrowser docs={docs} />
       </section>
     </div>
   );

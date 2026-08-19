@@ -18,6 +18,8 @@ import {
 } from '@/lib/db';
 import { embedText } from '@/lib/embed';
 import { hybridSearch } from '@/lib/search';
+import { mmrSelect, MMR_LAMBDA } from '@/lib/rerank';
+import { withNeighborContext } from '@/lib/context';
 import {
   buildRagMessages,
   extractRefs,
@@ -60,7 +62,7 @@ export async function POST(req: NextRequest) {
   if (!scopeDocIds) scopeDocIds = getSession(sessionId)?.docIds ?? [];
 
   // 多轮历史（最近 HISTORY_LIMIT 条，原样恢复角色）
-  let history: ChatMsg[] = [];
+  const history: ChatMsg[] = [];
   for (const m of listMessages(sessionId).slice(-HISTORY_LIMIT)) {
     if (m.role === 'user' || m.role === 'assistant') {
       history.push({ role: m.role, content: m.content });
@@ -104,27 +106,49 @@ export async function POST(req: NextRequest) {
           }
         }
         const qvec = await embedText(message);
-        // 混合检索：向量语义 + BM25 关键词，RRF 融合
-        const hits = hybridSearch({
+        // 混合检索：向量语义 + BM25 关键词，RRF 融合（多取候选供后续重排）
+        const fused = hybridSearch({
           embeddings: candidates.map((c) => c.embedding),
           texts: candidates.map((c) => c.text),
           queryEmbedding: qvec,
           query: message,
-          k: RAG_TOP_K,
+          k: RAG_TOP_K * 3,
           vectorMin: RAG_MIN_SCORE,
         });
-        if (hits.length === 0) {
+        if (fused.length === 0) {
           send({ type: 'error', message: '没有检索到与问题相关的资料，换个问法或补充文档试试' });
           return;
         }
-        const sources: SourceHit[] = hits.map((h, rank) => ({
-          n: rank + 1,
-          docName: candidates[h.index].docName,
-          idx: candidates[h.index].idx,
-          text: candidates[h.index].text.slice(0, 300),
-          score: h.vectorScore,
-          keywordScore: h.keywordScore,
-        }));
+
+        // MMR 多样性重排：从扩大的候选里去掉冗余块，保留信息量最大的 top-k
+        const fusedByIndex = new Map(fused.map((h) => [h.index, h]));
+        const top = mmrSelect({
+          items: fused.map((h) => ({
+            index: h.index,
+            score: h.rrf,
+            vector: candidates[h.index].embedding,
+            docId: candidates[h.index].docId,
+          })),
+          k: RAG_TOP_K,
+          lambda: MMR_LAMBDA,
+        });
+        const selected = top.length > 0 ? top : fused.slice(0, RAG_TOP_K).map((h) => h);
+
+        // 邻块上下文扩展：命中块并入同文档相邻块，答案更完整
+        const centers = selected.map((it) => candidates[it.index]);
+        const expanded = withNeighborContext(candidates, centers);
+
+        const sources: SourceHit[] = selected.map((it, rank) => {
+          const h = fusedByIndex.get(it.index);
+          return {
+            n: rank + 1,
+            docName: candidates[it.index].docName,
+            idx: candidates[it.index].idx,
+            text: expanded[rank],
+            score: h?.vectorScore ?? 0,
+            keywordScore: h?.keywordScore ?? 0,
+          };
+        });
 
         // 存档用户提问（先存，失败时也能在会话里看到）
         appendMessage(sessionId, 'user', message);
