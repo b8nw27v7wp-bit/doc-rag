@@ -13,11 +13,12 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { parseDocument, isSupported, supportedExts } from '../lib/parse';
 import { chunkStructured } from '../lib/chunk';
-import { embedTexts } from '../lib/embed';
+import { embedTexts, embedInfo } from '../lib/embed';
 import { insertDocument, documentCount, chunkCount, findDocumentByHash } from '../lib/db';
 import { contentHash } from '../lib/hash';
 import { buildContext } from '../lib/contextualize';
 import { topKeywords } from '../lib/keywords';
+import { embedSemaphore } from '../lib/semaphore';
 
 /** 递归收集受支持的文件 */
 function collectFiles(targets: string[]): string[] {
@@ -84,18 +85,25 @@ async function main() {
       if (structured.length === 0) throw new Error('未能切分文本');
       const total = structured.length;
       const contexts = structured.map((s, i) => buildContext(parsed.name, s.path, i, total));
-      const vecs = await embedTexts(structured.map((s, i) => `${contexts[i]}\n\n${s.text}`));
-      const id = insertDocument(
-        parsed.name,
-        parsed.ext,
-        buf.length,
-        structured.map((s, i) => ({ text: s.text, vec: vecs[i], context: contexts[i] })),
-        hash,
-        topKeywords(parsed.text)
-      );
-      ok++;
-      totalChunks += total;
-      console.log(`  ok    ${parsed.name}  → ${total} 块 / ${parsed.charCount.toLocaleString()} 字 (id=${id})`);
+      const release = await embedSemaphore.acquire();
+      try {
+        const vecs = await embedTexts(structured.map((s, i) => `${contexts[i]}\n\n${s.text}`));
+        const meta = embedInfo();
+        const id = insertDocument(
+          parsed.name,
+          parsed.ext,
+          buf.length,
+          structured.map((s, i) => ({ text: s.text, vec: vecs[i], context: contexts[i] })),
+          hash,
+          topKeywords(parsed.text),
+          { model: meta.model, dtype: meta.dtype, dim: vecs[0]?.length ?? meta.dim }
+        );
+        ok++;
+        totalChunks += total;
+        console.log(`  ok    ${parsed.name}  → ${total} 块 / ${parsed.charCount.toLocaleString()} 字 (id=${id})`);
+      } finally {
+        release();
+      }
     } catch (e) {
       failed++;
       console.log(`  FAIL  ${path.basename(file)}  ${e instanceof Error ? e.message : String(e)}`);

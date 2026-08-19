@@ -8,7 +8,7 @@ DocRAG 的测试分层：单元测试（`npm test`）+ 专项验证脚本（`scr
 npm test
 ```
 
-运行 `node --test`（124 项），覆盖：
+运行 `node --test`（157 项，含路由层集成测试），覆盖：
 
 | 文件 | 覆盖点 |
 |---|---|
@@ -25,13 +25,20 @@ npm test
 | `tests/auth.test.ts` | 密码派生 cookie、正确/错误/缺失校验、未启用放行 |
 | `tests/ssrf.test.ts` | 端点校验：放行 http/https/localhost/内网，阻断非 http 协议、元数据与保留地址、非法 URL |
 | `tests/rateLimit.test.ts` | 滑动窗口限流：超限拒绝、key 隔离、窗口过期恢复 |
+| `tests/ann.test.ts` | IVF 索引：确定性、簇分离覆盖、nprobe=nlist 全量、空输入、参数推荐 |
+| `tests/semaphore.test.ts` | 并发闸：上限放行、排队唤醒、释放幂等 |
+| `tests/citations.test.ts` | 有效/越界引用区分、去重、空输入 |
+| `tests/validate.test.ts` | 正整数/id 列表/有界字符串/温度解析边界 |
+| `tests/llm.test.ts` | SSE 载荷解析（delta / reasoning_content / 非法帧） |
+| `tests/routes.test.ts` | **路由层集成**：health、会话 CRUD+置顶、文档内容/搜索/批量删除、上传去重跳过、备份下载与恢复、非法恢复拒绝、chat 空库与超长分支（直接调用 handler，免起服务免模型） |
 | `tests/hash.test.ts` | SHA-256 一致性、16 进制格式、文本/字节/Uint8Array 一致性 |
 | `tests/keywords.test.ts` | 关键词提取：高频优先、去重、词频排序、n 限制、空文本 |
 | `tests/summarize.test.ts` | 摘要 prompt 组装、超长截断 |
 | `tests/parse.test.ts` | HTML 去标签/实体解析、CSV/TSV 分隔解析（引号/转义）、格式识别 |
 | `tests/export.test.ts` | refs 归一化（数组/JSON/非法/空）、Markdown 渲染、单会话/多会话打包 |
 | `tests/rag.test.ts` | 引用编号提取、prompt 组装、**多轮历史注入与截断**、system prompt 规则 |
-| `tests/db.test.ts` | 会话 CRUD、docIds 范围存取、置顶排序、消息追加/级联删除、自动标题生成、**内容哈希去重、批量删除、原文重组、全文搜索与 LIKE 转义、迁移、上下文头/关键词/摘要存取、内存缓存失效**（隔离临时数据目录） |
+| `tests/db.test.ts` | 会话 CRUD、docIds 范围存取、置顶排序、消息追加/级联删除、自动标题生成、**内容哈希去重、批量删除、原文重组、全文搜索与 LIKE 转义、迁移、上下文头/关键词/摘要/嵌入元信息存取、重建块、备份一致性快照与整体恢复、恢复校验、内存缓存失效**（隔离临时数据目录） |
+| `tests/bm25.test.ts` | tokenizer、BM25 排序与 tf 权重、专有名词、RRF 融合、k 截断、全不相关、**预建索引复用一致性、null 向量混合检索** |
 
 ## 专项验收脚本
 
@@ -81,8 +88,13 @@ npm run dev
 
 数据库文件在 `data/app.db`（WAL 模式）。删除即重置全部数据。
 
+## CI
+
+推送到 `main` 或提交 PR 时，GitHub Actions（`.github/workflows/ci.yml`）自动执行：`npm ci` → audit（critical 门槛）→ lint → test → build。全部通过才可合并。
+
 ## 已知限制
 
-- 上传接口为同步处理，大文件（>10MB PDF）嵌入会阻塞单请求较久；后续可改任务队列
-- 检索为全量暴力余弦（无 ANN 索引），文档块数过万后应考虑 sqlite-vec 或 HNSW
+- 上传接口为同步处理，大文件（>10MB PDF）嵌入会阻塞单请求较久（已加 `EMBED_CONCURRENCY` 并发闸缓解多请求互挤）
+- 检索默认全量精确计算（向量 + BM25 倒排）；块数 ≥ `ANN_MIN_CHUNKS`（默认 2000）自动切换 IVF 近似向量检索
 - PDF 仅支持文本层，扫描件/图片型 PDF 需先 OCR
+- `@huggingface/transformers` 传递依赖存在 high 级公告（adm-zip/sharp），上游暂无修复

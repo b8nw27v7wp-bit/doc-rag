@@ -1,6 +1,8 @@
 # DocRAG · 本地优先的 AI 文档问答
 
-上传文档即可提问。文档解析、文本嵌入、向量检索**全部在你的电脑本地完成** —— 文档内容与向量数据不出设备一步，零嵌入 API 成本。回答支持任意 OpenAI 兼容模型：DeepSeek / GLM / Kimi 云端，或 Ollama 本地模型实现全离线。
+[![CI](https://github.com/b8nw27v7wp-bit/doc-rag/actions/workflows/ci.yml/badge.svg)](https://github.com/b8nw27v7wp-bit/doc-rag/actions)
+
+上传文档即可提问。文档解析、**结构感知分块、上下文检索、混合检索（向量 + BM25）、MMR 去冗余、多查询检索**全部在**你的电脑本地完成** —— 文档内容与向量数据不出设备一步，零嵌入 API 成本。回答支持任意 OpenAI 兼容模型：DeepSeek / GLM / Kimi 云端，或 Ollama 本地模型实现全离线；支持推理模型思考过程展示、引用可信度自检、嵌入模型版本管理与一键重新嵌入、数据备份/恢复。
 
 ## 为什么做这个
 
@@ -23,7 +25,8 @@
 - 流式回答（NDJSON over fetch stream，带超时保护），回答标注 [n] 引用，点击查看原文出处段落
 - **多轮对话会话**：上下文随问答自动保存（SQLite），可随时回来继续；会话标题从首问自动生成（≤24 字）；**支持重命名、置顶、搜索与 Markdown 导出**
 - **按文档筛选检索范围**：每个会话可限定仅在指定文档内问答，多主题资料互不干扰
-- **文档库管理**：全文搜索（命中段落高亮切片）、批量删除、查看原文内容、**自动标签 + LLM 摘要**
+- **文档库管理**：全文搜索（命中段落高亮切片）、批量删除、查看原文、**自动标签 + LLM 摘要 + 一键重新嵌入**
+- **数据安全**：`GET/POST /api/backup` 一致性备份与安全恢复；嵌入模型信息随文档落库，换模型后旧块自动降级仅关键词召回并预警
 - **CLI 批量导入**：`npm run import -- 目录/` 递归扫描本地文档入库，不经 HTTP，自动跳过重复文档
 - **REST API + 健康检查 + OpenAPI 文档**：`/api/openapi` 机器可读，`/api/health` 供探活/容器健康检查
 - 模型预设：DeepSeek / GLM / Kimi / Ollama / 自定义 OpenAI 兼容端点
@@ -47,7 +50,7 @@ npm run dev                  # http://localhost:3000
 验证安装：
 
 ```bash
-npm test                     # 124 项单元测试
+npm test                     # 157 项单元测试（含路由层集成测试）
 npm run build && npm start   # 生产构建
 node scripts/verify-embed.mjs        # 验证本地嵌入模型
 node scripts/verify-api.mjs          # 端到端验收（需服务已启动）
@@ -95,8 +98,8 @@ docker compose up -d --build
 | 前端 | Next.js 16 (App Router) + Tailwind 4 | 浅色极简，无组件库，会话侧栏双栏布局 |
 | 解析 | pdf-parse / mammoth / 内置 | 纯 JS 本地解析，支持 txt/md/pdf/docx/html/csv/tsv |
 | 嵌入 | @huggingface/transformers | 本地 ONNX 推理，q8 量化 |
-| 存储 | node:sqlite (内置) | 零原生依赖，单文件数据库，WAL 模式；文档/分块/会话/消息四表，分块带上下文头 |
-| 检索 | 混合检索 + 上下文检索 + 多查询 + MMR | 余弦 + BM25 经 RRF 融合，块嵌入带章节上下文；可选多查询改写增强召回，MMR 去冗余 |
+| 存储 | node:sqlite (内置) | 零原生依赖，单文件数据库，WAL 模式；文档/分块/会话/消息四表，分块带上下文头，文档带嵌入模型元信息 |
+| 检索 | 混合检索 + 上下文检索 + 多查询 + MMR + ANN | 余弦 + BM25 经 RRF 融合（BM25 倒排 posting、大库 IVF 近似加速）；块嵌入带章节上下文；多查询增强召回，MMR 去冗余 |
 | LLM | OpenAI 兼容 chat/completions | BYOK 透传（x-api-key 请求头），多轮上下文注入 |
 | 部署 | Docker 多阶段 / CLI 批量导入 | 构建期预下载模型，数据卷持久化 |
 
@@ -108,8 +111,13 @@ docker compose up -d --build
 | `LLM_API_KEY` | - | 服务端兜底 Key（前端填写的 Key 优先） |
 | `LLM_BASE_URL` | `https://api.deepseek.com/v1` | 服务端兜底端点 |
 | `LLM_MODEL` | `deepseek-chat` | 服务端兜底模型 |
+| `LLM_TEMPERATURE` | - | 默认采样温度 |
+| `LLM_MAX_TOKENS` | - | 默认最大生成 token |
+| `LLM_TIMEOUT_MS` | `120000` | 单次调用超时（毫秒） |
 | `EMBED_MODEL` | `Xenova/paraphrase-multilingual-MiniLM-L12-v2` | 可换其他 transformers.js 兼容模型 |
 | `EMBED_DTYPE` | `q8` | 量化精度 |
+| `EMBED_CONCURRENCY` | `2` | 嵌入并发上限（上传/重嵌入共享） |
+| `ANN_MIN_CHUNKS` | `2000` | 块数达到该值启用 IVF 近似向量检索；`0` 禁用 |
 | `DATA_DIR` | `./data` | SQLite 数据目录 |
 | `MAX_UPLOAD_MB` | `50` | 单文件上传大小上限 |
 | `MAX_FILES` | `20` | 单次上传文件数上限 |
@@ -123,45 +131,57 @@ docker compose up -d --build
 - 部署到局域网/公网时设置 `APP_PASSWORD` 即可设访问门槛：cookie 由密码单向派生、不可伪造，且**页面与全部 API 同步受保护**（未认证 API 返回 401）
 - 防 SSRF：LLM 端点地址经校验，仅允许 http/https，阻断云元数据/保留地址
 - 登录接口限流（默认 60s 内 10 次），防暴力枚举
+- 备份/恢复安全：恢复前校验 SQLite 文件头，自动保留 `app.db.pre-restore` 回退快照
+- 依赖审计：CI 对 critical 级漏洞设门槛；`@huggingface/transformers` 传递依赖（adm-zip / sharp）存在 high 级公告且上游暂无修复，仅在本机解析模型文件时触发
 
 ## 目录结构
 
 ```
 app/
-  page.tsx            # 首页：上传 + 文档库（搜索 / 批量删除 / 查看原文）
-  chat/page.tsx       # 问答页：会话侧栏 + 流式对话 + 引用 + 设置 + 导出
+  page.tsx            # 首页：上传 + 文档库（搜索 / 批量删除 / 标签 / 摘要 / 查看原文）
+  chat/page.tsx       # 问答页：会话侧栏 + 流式对话（reasoning）+ 引用 + 设置 + 导出
   lock/page.tsx       # 可选密码门
   error.tsx / not-found.tsx / loading.tsx  # 全局错误与加载边界
-  api/upload/         # 上传解析入库（限制 + 去重 + 标签）
+  api/upload/         # 上传解析入库（限制 + 去重 + 标签 + 并发闸）
   api/documents/      # 文档列表 / 单个或批量删除
   api/documents/content/  # 文档原文内容
   api/documents/summarize/  # 文档摘要（可选 LLM）
+  api/documents/reembed/   # 文档重新嵌入（换模型后重建向量）
   api/search/         # 全文搜索
   api/chat/           # RAG 流式问答（多轮历史 + 自动存档, NDJSON）
-  api/sessions/       # 会话管理（列表/新建/重命名/删除）
+  api/sessions/       # 会话管理（列表/新建/重命名/置顶/删除）
   api/sessions/export/   # 会话导出 Markdown
   api/messages/       # 会话消息恢复（含引用重放）
-  api/lock/           # 密码校验
-  api/health/         # 健康检查
+  api/lock/           # 密码校验（限流）
+  api/backup/         # 数据备份下载 / 恢复上传
+  api/health/         # 健康检查（含嵌入队列状态）
   api/openapi/        # OpenAPI 3.1 文档
 components/
   session-sidebar.tsx # 会话列表 + 置顶/搜索/重命名 + 文档范围筛选
   doc-browser.tsx     # 文档浏览器（搜索/批量删除/标签/摘要/原文查看）
   upload.tsx          # 拖拽上传（去重/跳过展示）
-  nav.tsx             # 顶部导航
+  message-bubble.tsx  # 消息气泡（引用芯片/思考过程/越界引用提示）
+  model-settings.tsx  # 模型设置弹窗（温度/查询增强/BYOK）
+  locale.tsx          # 基础 i18n（中/英）+ 本地化 Provider
+  nav.tsx             # 顶部导航（含深色模式/语言切换）
 proxy.ts              # 可选密码门（Next 16 proxy 约定）
+.github/workflows/ci.yml  # CI：lint / test / build / audit
 lib/
-  parse.ts            # txt/md/pdf/docx 解析
+  parse.ts            # txt/md/pdf/docx/html/csv/tsv 解析
   chunk.ts            # 段落感知分块 + 结构感知分块（标题层级）
-  embed.ts            # 本地嵌入（transformers.js 单例）
+  embed.ts            # 本地嵌入（transformers.js 单例） + 嵌入元信息
   vector.ts           # 余弦检索 + BLOB 转换
-  bm25.ts             # BM25 关键词检索（中文 bigram）
-  search.ts           # 混合检索（RRF 融合）+ 多查询合并
+  bm25.ts             # BM25 关键词检索（中文 bigram + 倒排 posting）
+  search.ts           # 混合检索（RRF 融合）+ 多查询合并 + null 向量兼容
+  ann.ts              # IVF-Lite 近似向量索引（大库加速）
   rerank.ts           # MMR 多样性重排
   context.ts          # 邻块上下文扩展
   contextualize.ts    # 上下文检索（context head 拼接）
   multiQuery.ts       # 查询改写提示 + 结果解析
   eval.ts             # 检索评估指标（Recall/Precision/MRR）
+  citations.ts        # 引用可信度校验（越界编号）
+  validate.ts         # 请求体参数校验
+  semaphore.ts        # 嵌入并发闸
   hash.ts             # 内容哈希（重复检测）
   keywords.ts         # 文档关键词提取（词频加权）
   summarize.ts        # 文档摘要 prompt 组装
@@ -170,10 +190,10 @@ lib/
   ssrf.ts             # LLM 端点校验（防 SSRF）
   rateLimit.ts        # 内存滑动窗口限流
   export.ts           # 会话 Markdown 导出
-  db.ts               # node:sqlite 惰性初始化（WAL + 迁移，文档/块/会话/消息四表）
-  llm.ts              # OpenAI 兼容流式 + 非流式调用（超时保护）
+  db.ts               # node:sqlite 惰性初始化（WAL + 迁移 + 备份/恢复 + 检索缓存）
+  llm.ts              # OpenAI 兼容流式/非流式调用（超时/温度/推理内容）
   rag.ts              # prompt 组装（历史注入）+ 引用提取
-tests/                # node --test 单元测试（91 项）
+tests/                # node --test（157 项，含路由层集成测试）
 scripts/
   import-cli.ts       # CLI 批量导入（目录递归 + 去重）
   verify-embed.mjs    # 嵌入模型验证
@@ -192,8 +212,12 @@ docker-compose.yml    # 一键部署 + 数据卷 + 健康检查
 - [x] 文档自动标签 + LLM 摘要
 - [x] 会话置顶 / 搜索
 - [x] REST API 文档（OpenAPI）与健康检查接口
+- [x] 嵌入模型版本管理与重新嵌入
+- [x] 数据备份 / 恢复
+- [x] BM25 倒排加速 + IVF 近似检索（大库）
+- [x] LLM 参数化与推理模型支持（temperature/max_tokens/reasoning）
+- [x] 引用可信度自检、输入校验、CI、路由集成测试、深色模式、基础 i18n
 - [ ] 扫描件 PDF 的 OCR 支持
-- [ ] ANN 向量索引（万级块规模提速）
 - [ ] 重排序模型（cross-encoder）接入
 - [ ] PDF 导出分享
 

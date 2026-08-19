@@ -96,6 +96,39 @@ test('hybridSearch：全部不相关时返回空', () => {
   assert.deepEqual(hits, []);
 });
 
+test('hybridSearch：null 向量仅参与关键词检索（混合维度兼容）', () => {
+  const embeddings: (Float32Array | null)[] = [v(1, 0), null, v(0.9, 0.1)];
+  const texts = ['无关键词的段落。', '贝尔不等式实验验证。', '另一个无关段落。'];
+  const hits = hybridSearch({
+    embeddings,
+    texts,
+    queryEmbedding: v(0, 1),
+    query: '贝尔不等式',
+    k: 3,
+    vectorMin: 0.1,
+  });
+  // null 向量的块（index 1）没有向量分，但被关键词召回带出
+  const kw = hits.find((h) => h.index === 1);
+  assert.ok(kw, '关键词应带出无向量的块');
+  assert.equal(kw.vectorScore, 0);
+  assert.ok((kw.keywordScore ?? 0) > 0);
+});
+
+test('hybridSearch：全部向量为 null 时仅关键词结果', () => {
+  const embeddings: (Float32Array | null)[] = [null];
+  const hits = hybridSearch({
+    embeddings,
+    texts: ['贝尔不等式被违反'],
+    queryEmbedding: v(0, 1),
+    query: '贝尔不等式',
+    k: 3,
+    vectorMin: 0.1,
+  });
+  assert.equal(hits.length, 1);
+  assert.equal(hits[0].index, 0);
+  assert.equal(hits[0].vectorScore, 0);
+});
+
 test('hybridSearch：复用预建 BM25 索引结果一致', () => {
   const embeddings = [v(1, 0, 0), v(0, 1, 0), v(0.95, 0.05, 0)];
   const texts = ['这里完全没有查询词出现。', '贝尔不等式违反，量子纠缠被证实。', '另一个与查询语义接近但与关键词无关的段落。'];

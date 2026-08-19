@@ -10,8 +10,8 @@ export interface RankItem {
   index: number;
   /** 相关性分数（越大越相关，如 RRF 分数） */
   score: number;
-  /** 可选向量，用于多样性相似度（默认用归一化向量的余弦/点积） */
-  vector?: Float32Array;
+  /** 可选向量，用于多样性相似度（默认用归一化向量的余弦/点积）；null 表示无向量（仅关键词命中） */
+  vector?: Float32Array | null;
   /** 可选文档 id：优先保证跨文档多样性可注入文档级惩罚 */
   docId?: number;
 }

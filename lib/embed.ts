@@ -8,9 +8,14 @@ import { pipeline, env } from '@huggingface/transformers';
 // 注意：必须在模块加载期设置，之后模型 URL 才指向镜像
 env.remoteHost = process.env.HF_ENDPOINT || 'https://hf-mirror.com';
 
-const EMBED_MODEL = process.env.EMBED_MODEL || 'Xenova/paraphrase-multilingual-MiniLM-L12-v2';
-const EMBED_DTYPE = (process.env.EMBED_DTYPE || 'q8') as 'q8' | 'auto';
-const EMBED_DIM = 384;
+export const EMBED_MODEL = process.env.EMBED_MODEL || 'Xenova/paraphrase-multilingual-MiniLM-L12-v2';
+export const EMBED_DTYPE = (process.env.EMBED_DTYPE || 'q8') as 'q8' | 'auto';
+export const EMBED_DIM = 384;
+
+/** 当前嵌入配置元信息（写入文档记录，供模型版本校验/升级） */
+export function embedInfo(): { model: string; dtype: string; dim: number } {
+  return { model: EMBED_MODEL, dtype: EMBED_DTYPE, dim: EMBED_DIM };
+}
 
 // v4 不再导出 Pipeline 类型，用结构类型描述所需最小表面
 interface EmbedOutput {

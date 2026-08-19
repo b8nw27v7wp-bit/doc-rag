@@ -1,9 +1,11 @@
 /**
- * BM25 关键词检索（零依赖）。
+ * BM25 关键词检索（零依赖，倒排 posting 提速）。
  * 设计与动机：
  *  - 向量检索擅长语义相似，但对专有名词/精确术语（如「贝尔不等式」「GLM-4」）迟钝；
  *    关键词检索正好互补，两者 RRF 融合可显著提升召回。
  *  - 中文分词不做第三方依赖：CJK 连续串按滑窗 bigram 切分，单字兜底（前缀区分权重）。
+ *  - 索引构建时同时生成 posting（token → 命中文档与 tf），查询只遍历命中文档，
+ *    不再全库扫描（大库提速的主要来源），打分结果与逐文档扫描完全一致。
  */
 
 export interface BM25Doc {
@@ -41,48 +43,49 @@ const K1 = 1.5;
 const B = 0.75;
 
 export class BM25Index {
+  /** 各文档 token 序列（保留以便按文档长度归一） */
   private readonly tokenized: string[][];
   private readonly df = new Map<string, number>();
+  /** token → 命中文档（doc index + tf），即倒排索引 */
+  private readonly postings = new Map<string, Array<{ i: number; tf: number }>>();
   private readonly avgdl: number;
   private readonly N: number;
 
   constructor(docs: BM25Doc[]) {
     this.N = docs.length;
-    this.tokenized = docs.map((d) => tokenize(d.text));
-    const totalLen = this.tokenized.reduce((a, t) => a + t.length, 0);
-    this.avgdl = totalLen / Math.max(1, this.N);
-    const seen = new Set<string>();
-    for (const toks of this.tokenized) {
-      seen.clear();
-      for (const t of toks) {
-        if (!seen.has(t)) {
-          seen.add(t);
-          this.df.set(t, (this.df.get(t) ?? 0) + 1);
-        }
+    this.tokenized = new Array(docs.length);
+    let totalLen = 0;
+
+    for (let i = 0; i < docs.length; i++) {
+      const toks = tokenize(docs[i].text);
+      this.tokenized[i] = toks;
+      totalLen += toks.length;
+      const local = new Map<string, number>();
+      for (const t of toks) local.set(t, (local.get(t) ?? 0) + 1);
+      for (const [t, tf] of local) {
+        this.df.set(t, (this.df.get(t) ?? 0) + 1);
+        const arr = this.postings.get(t);
+        if (arr) arr.push({ i, tf });
+        else this.postings.set(t, [{ i, tf }]);
       }
     }
+    this.avgdl = totalLen / Math.max(1, this.N);
   }
 
   search(query: string, k: number): BM25Hit[] {
     const qTokens = tokenize(query);
     if (qTokens.length === 0) return [];
     const scores = new Map<number, number>();
-    const idfCache = new Map<string, number>();
     const uniqueQ = [...new Set(qTokens)];
     for (const t of uniqueQ) {
-      let idf = idfCache.get(t);
-      if (idf === undefined) {
-        const df = this.df.get(t) ?? 0;
-        // 平滑 idf，避免除零；df 过高（超半数字档）时自然压低
-        idf = Math.log(1 + (this.N - df + 0.5) / (df + 0.5));
-        idfCache.set(t, idf);
-      }
+      const posting = this.postings.get(t);
+      if (!posting || posting.length === 0) continue;
+      const df = this.df.get(t) ?? 0;
+      // 平滑 idf，避免除零；df 过高（超半数字档）时自然压低
+      const idf = Math.log(1 + (this.N - df + 0.5) / (df + 0.5));
       if (idf <= 0) continue;
-      for (let i = 0; i < this.tokenized.length; i++) {
-        const toks = this.tokenized[i];
-        const tf = countOf(toks, t);
-        if (tf === 0) continue;
-        const denom = tf + K1 * (1 - B + B * (toks.length / this.avgdl));
+      for (const { i, tf } of posting) {
+        const denom = tf + K1 * (1 - B + B * (this.tokenized[i].length / this.avgdl));
         scores.set(i, (scores.get(i) ?? 0) + (idf * (tf * (K1 + 1))) / denom);
       }
     }
@@ -91,10 +94,4 @@ export class BM25Index {
       .sort((a, b) => b.score - a.score)
       .slice(0, k);
   }
-}
-
-function countOf(arr: string[], target: string): number {
-  let n = 0;
-  for (const x of arr) if (x === target) n++;
-  return n;
 }

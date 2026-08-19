@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.8.0] - 2026-08-19
+
+### Added
+
+- 嵌入模型版本管理：documents 记录 embed_model/embed_dtype/embed_dim；检索时按向量维度检测混合模型块并自动降级为仅关键词召回 + 前端警告；新增 `/api/documents/reembed` 一键按当前模型重建向量
+- 数据备份/恢复：`GET /api/backup` 下载 VACUUM INTO 一致性快照，`POST /api/backup`（multipart）安全恢复（SQLite 文件头校验、恢复前自动落 `app.db.pre-restore` 快照、清理旧 WAL/SHM）
+- 并发控制：`lib/semaphore.ts` 全局嵌入并发闸（`EMBED_CONCURRENCY`，默认 2），上传/重嵌入共享；`/api/health` 暴露队列状态
+- 检索性能：BM25 重构为倒排 posting 打分（查询只遍历命中文档，结果与原实现逐位一致）；ANN（IVF-Lite k-means 分桶）模块 `lib/ann.ts`，块数 ≥ `ANN_MIN_CHUNKS`（默认 2000）且无范围过滤时自动启用并跨请求缓存
+- LLM 参数化：请求体/环境变量可配 temperature、max_tokens、超时（`LLM_TEMPERATURE/LLM_MAX_TOKENS/LLM_TIMEOUT_MS`），前端设置面板新增温度滑杆；支持推理模型 `reasoning_content` 解析（thinking 事件单独透传展示）
+- 引用可信度自检：`checkCitations` 检出越界引用编号（模型编造的来源），前端隐藏假引用并提示
+- 请求体校验：`lib/validate.ts`（正整数/id 列表/有界字符串/温度），路由层统一接入
+- 工程：GitHub Actions CI（lint/test/build + critical 级 audit）；**路由层集成测试** `tests/routes.test.ts`（会话/文档/搜索/健康/备份/去重/chat 空库分支，直接调用 handler 无需起服务）
+- 前端：chat 页拆分 `message-bubble.tsx` / `model-settings.tsx`；基础 i18n（中/英切换，`components/locale.tsx`，客户端主要交互文案）；深色模式（整页反色方案，导航栏切换）
+- 依赖风险处置：CI 增加 critical 级 audit 门槛；README 记录传递依赖 high 级别现状（上游暂无修复）
+- 单测新增 40 项（ANN 分桶、信号量、引用校验、参数校验、SSE 解析、null 向量混合检索、备份/恢复/重嵌、路由集成），共 157 项全绿
+
+### 已知限制
+
+- adm-zip / sharp 的 high 级传递依赖漏洞（@huggingface/transformers 上游）暂无官方修复，仅本地解析模型文件时触发
+- ANN 为 IVF 近似检索，开启后向量侧可能在极端场景略降召回（BM25 不受影响，可设 `ANN_MIN_CHUNKS=0` 回退精确检索）
+- 深色模式用整页反色实现，彩色图片（当前无）需注意观感
+
 ## [0.7.0] - 2026-08-19
 
 ### Added

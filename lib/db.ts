@@ -5,7 +5,7 @@
  * 惰性初始化：模块导入零副作用（Next 构建期不触发数据库访问，避免多 worker 锁冲突）。
  */
 import { DatabaseSync } from 'node:sqlite';
-import { mkdirSync, statSync } from 'node:fs';
+import { mkdirSync, statSync, writeFileSync, readFileSync, rmSync, copyFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { bytesToF32 } from './vector';
 
@@ -38,6 +38,9 @@ CREATE TABLE IF NOT EXISTS documents (
   content_hash TEXT,
   keywords     TEXT,
   summary      TEXT,
+  embed_model  TEXT,
+  embed_dtype  TEXT,
+  embed_dim    INTEGER,
   created_at   TEXT    NOT NULL DEFAULT (datetime('now', 'localtime')),
   updated_at   TEXT    NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
@@ -100,6 +103,11 @@ function migrate(d: DatabaseSync): void {
   if (!docCols.has('summary')) {
     d.exec('ALTER TABLE documents ADD COLUMN summary TEXT');
   }
+  if (!docCols.has('embed_model')) {
+    d.exec('ALTER TABLE documents ADD COLUMN embed_model TEXT');
+    d.exec('ALTER TABLE documents ADD COLUMN embed_dtype TEXT');
+    d.exec('ALTER TABLE documents ADD COLUMN embed_dim INTEGER');
+  }
   const chunkCols = new Set(
     (d.prepare('PRAGMA table_info(chunks)').all() as { name: string }[]).map((c) => c.name)
   );
@@ -114,6 +122,12 @@ function migrate(d: DatabaseSync): void {
   }
 }
 
+export interface EmbedMeta {
+  model: string;
+  dtype: string | null;
+  dim: number | null;
+}
+
 export interface DocumentRecord {
   id: number;
   name: string;
@@ -124,6 +138,9 @@ export interface DocumentRecord {
   contentHash: string | null;
   keywords: string[];
   summary: string | null;
+  embedModel: string | null;
+  embedDtype: string | null;
+  embedDim: number | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -150,16 +167,27 @@ export function insertDocument(
   size: number,
   chunks: { text: string; vec: Float32Array; context?: string }[],
   contentHash: string | null = null,
-  keywords: string[] = []
+  keywords: string[] = [],
+  embeddedWith?: EmbedMeta
 ): number {
   const d = getDb();
   const docId = Number(
     d
       .prepare(
-        'INSERT INTO documents (name, ext, size, char_count, chunk_count, content_hash, keywords) VALUES (?, ?, ?, ?, ?, ?, ?)'
+        'INSERT INTO documents (name, ext, size, char_count, chunk_count, content_hash, keywords, embed_model, embed_dtype, embed_dim) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
       )
-      .run(name, ext, size, chunks.reduce((a, c) => a + c.text.length, 0), chunks.length, contentHash, keywords.join(','))
-      .lastInsertRowid
+      .run(
+        name,
+        ext,
+        size,
+        chunks.reduce((a, c) => a + c.text.length, 0),
+        chunks.length,
+        contentHash,
+        keywords.join(','),
+        embeddedWith?.model ?? null,
+        embeddedWith?.dtype ?? null,
+        embeddedWith?.dim ?? null
+      ).lastInsertRowid
   );
   const ins = d.prepare('INSERT INTO chunks (doc_id, idx, text, context, embedding) VALUES (?, ?, ?, ?, ?)');
   d.exec('BEGIN');
@@ -176,6 +204,39 @@ export function insertDocument(
   return docId;
 }
 
+/** 重新嵌入：替换文档全部分块与嵌入元信息（保留文档元信息与摘要），返回新块数 */
+export function rebuildDocumentChunks(
+  id: number,
+  chunks: { text: string; vec: Float32Array; context?: string }[],
+  embeddedWith?: EmbedMeta
+): number {
+  const d = getDb();
+  d.exec('BEGIN');
+  try {
+    d.prepare('DELETE FROM chunks WHERE doc_id = ?').run(id);
+    const ins = d.prepare('INSERT INTO chunks (doc_id, idx, text, context, embedding) VALUES (?, ?, ?, ?, ?)');
+    for (let i = 0; i < chunks.length; i++) {
+      ins.run(id, i, chunks[i].text, chunks[i].context ?? null, f32ToU8(chunks[i].vec));
+    }
+    d.prepare(
+      "UPDATE documents SET chunk_count = ?, char_count = ?, embed_model = ?, embed_dtype = ?, embed_dim = ?, updated_at = datetime('now', 'localtime') WHERE id = ?"
+    ).run(
+      chunks.length,
+      chunks.reduce((a, c) => a + c.text.length, 0),
+      embeddedWith?.model ?? null,
+      embeddedWith?.dtype ?? null,
+      embeddedWith?.dim ?? null,
+      id
+    );
+    d.exec('COMMIT');
+  } catch (e) {
+    d.exec('ROLLBACK');
+    throw e;
+  }
+  invalidateChunks();
+  return chunks.length;
+}
+
 /** 逗号分隔的关键词列 → string[] */
 function parseKeywords(raw: string | null): string[] {
   if (!raw) return [];
@@ -189,7 +250,7 @@ function parseKeywords(raw: string | null): string[] {
 export function listDocuments(): DocumentRecord[] {
   const rows = getDb()
     .prepare(
-      'SELECT id, name, ext, size, char_count, chunk_count, content_hash, keywords, summary, created_at, updated_at FROM documents ORDER BY id DESC'
+      'SELECT id, name, ext, size, char_count, chunk_count, content_hash, keywords, summary, embed_model, embed_dtype, embed_dim, created_at, updated_at FROM documents ORDER BY id DESC'
     )
     .all() as unknown as {
     id: number;
@@ -201,6 +262,9 @@ export function listDocuments(): DocumentRecord[] {
     content_hash: string | null;
     keywords: string | null;
     summary: string | null;
+    embed_model: string | null;
+    embed_dtype: string | null;
+    embed_dim: number | null;
     created_at: string;
     updated_at: string;
   }[];
@@ -214,6 +278,9 @@ export function listDocuments(): DocumentRecord[] {
     contentHash: r.content_hash,
     keywords: parseKeywords(r.keywords),
     summary: r.summary,
+    embedModel: r.embed_model,
+    embedDtype: r.embed_dtype,
+    embedDim: r.embed_dim,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   }));
@@ -223,7 +290,7 @@ export function listDocuments(): DocumentRecord[] {
 export function getDocument(id: number): DocumentRecord | null {
   const row = getDb()
     .prepare(
-      'SELECT id, name, ext, size, char_count, chunk_count, content_hash, keywords, summary, created_at, updated_at FROM documents WHERE id = ?'
+      'SELECT id, name, ext, size, char_count, chunk_count, content_hash, keywords, summary, embed_model, embed_dtype, embed_dim, created_at, updated_at FROM documents WHERE id = ?'
     )
     .get(id) as
     | {
@@ -236,6 +303,9 @@ export function getDocument(id: number): DocumentRecord | null {
         content_hash: string | null;
         keywords: string | null;
         summary: string | null;
+        embed_model: string | null;
+        embed_dtype: string | null;
+        embed_dim: number | null;
         created_at: string;
         updated_at: string;
       }
@@ -251,6 +321,9 @@ export function getDocument(id: number): DocumentRecord | null {
     contentHash: row.content_hash,
     keywords: parseKeywords(row.keywords),
     summary: row.summary,
+    embedModel: row.embed_model,
+    embedDtype: row.embed_dtype,
+    embedDim: row.embed_dim,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -394,6 +467,58 @@ export function dbSizeBytes(): number {
   } catch {
     return 0;
   }
+}
+
+/** 通过 VACUUM INTO 生成一致性备份（写临时文件后读回，含 WAL 已合并数据） */
+export function backupDatabase(): Buffer {
+  const d = getDb();
+  const target = path.join(DATA_DIR, `backup-${Date.now()}-${Math.random().toString(36).slice(2)}.db`);
+  try {
+    d.exec(`VACUUM INTO '${target.replace(/'/g, "''")}'`);
+    return readFileSync(target);
+  } finally {
+    try {
+      rmSync(target, { force: true });
+    } catch {
+      // 临时文件清理失败不影响备份结果
+    }
+  }
+}
+
+/**
+ * 恢复数据库：校验 SQLite 文件头 → 关闭当前连接 → 现库快照为 pre-restore → 写入新库 → 重开。
+ * 注意：恢复会用备份文件完全替换当前数据。
+ */
+export function restoreDatabase(buf: Buffer): void {
+  const header = buf.subarray(0, 16).toString('utf8');
+  if (header !== 'SQLite format 3\u0000') throw new Error('不是有效的 SQLite 数据库文件');
+  const source = path.join(DATA_DIR, 'app.db');
+  const bak = path.join(DATA_DIR, 'app.db.pre-restore');
+  if (db) {
+    try {
+      db.close();
+    } catch {
+      // 忽略关闭异常，继续替换文件
+    }
+  }
+  db = null;
+  invalidateChunks();
+  if (existsSync(source)) {
+    copyFileSync(source, bak);
+  }
+  // 清理旧的 WAL/SHM，避免与新库混用
+  for (const f of ['app.db-wal', 'app.db-shm']) {
+    const p = path.join(/* turbopackIgnore: true */ DATA_DIR, f);
+    if (existsSync(p)) {
+      try {
+        rmSync(p, { force: true });
+      } catch {
+        // 忽略
+      }
+    }
+  }
+  writeFileSync(source, buf);
+  getDb(); // 重开 + 迁移
 }
 
 // ────────────────────────── 会话与消息 ──────────────────────────

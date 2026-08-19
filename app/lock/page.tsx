@@ -2,10 +2,12 @@
 
 import { Suspense, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
+import { useT } from '@/components/locale';
 
 function LockForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const t = useT();
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -21,13 +23,13 @@ function LockForm() {
       });
       if (!res.ok) {
         const data = (await res.json().catch(() => null)) as { error?: string } | null;
-        setError(data?.error || '验证失败');
+        setError(data?.error === '密码错误' ? t('密码错误') : data?.error || t('验证失败'));
         return;
       }
       router.push(searchParams.get('from') || '/');
       router.refresh();
     } catch {
-      setError('网络错误，请重试');
+      setError(t('网络错误，请重试'));
     } finally {
       setBusy(false);
     }
@@ -36,13 +38,13 @@ function LockForm() {
   return (
     <div className="flex min-h-[60vh] flex-col items-center justify-center gap-4">
       <h1 className="text-[22px] font-semibold tracking-tight">DocRAG</h1>
-      <p className="text-[13px] text-[#86868b]">此应用启用了访问密码，请输入后继续</p>
+      <p className="text-[13px] text-[#86868b]">{t('此应用启用了访问密码，请输入后继续')}</p>
       <input
         type="password"
         value={password}
         onChange={(e) => setPassword(e.target.value)}
         onKeyDown={(e) => e.key === 'Enter' && void submit()}
-        placeholder="访问密码"
+        placeholder={t('访问密码')}
         autoFocus
         className="h-10 w-64 rounded-xl bg-[#f5f5f7] px-4 text-[14px] outline-none focus:bg-[#ebebee]"
       />
@@ -52,7 +54,7 @@ function LockForm() {
         disabled={busy || !password}
         className="rounded-xl bg-[#1d1d1f] px-6 py-2.5 text-[13px] font-medium text-white hover:opacity-85 disabled:opacity-30"
       >
-        {busy ? '验证中…' : '进入'}
+        {busy ? t('验证中…') : t('进入')}
       </button>
     </div>
   );

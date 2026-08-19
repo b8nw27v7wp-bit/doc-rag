@@ -186,3 +186,57 @@ test('allChunks 内存缓存：未变更时同引用，变更后失效', () => {
   db.insertDocument('缓存失效', 'txt', 1, [{ text: 'x', vec: new Float32Array([0]) }]);
   assert.notStrictEqual(a, db.allChunks(), '写入后缓存应失效重建');
 });
+
+test('insertDocument 记录嵌入模型/精度/维度元信息', () => {
+  const id = db.insertDocument(
+    '元信息',
+    'txt',
+    1,
+    [{ text: 'x', vec: new Float32Array([0.5, 0.25]) }],
+    null,
+    [],
+    { model: 'MiniLM', dtype: 'q8', dim: 2 }
+  );
+  const d = db.getDocument(id);
+  assert.equal(d?.embedModel, 'MiniLM');
+  assert.equal(d?.embedDtype, 'q8');
+  assert.equal(d?.embedDim, 2);
+});
+
+test('rebuildDocumentChunks 替换块并更新嵌入元信息', () => {
+  const id = db.insertDocument('重嵌', 'md', 1, [{ text: '旧块', vec: new Float32Array([1, 2]) }], null, [], { model: 'old', dtype: 'q8', dim: 2 });
+  const n = db.rebuildDocumentChunks(
+    id,
+    [
+      { text: '新块一', vec: new Float32Array([1, 2, 3]) },
+      { text: '新块二', vec: new Float32Array([1, 2, 3]) },
+    ],
+    { model: 'new', dtype: 'q8', dim: 3 }
+  );
+  assert.equal(n, 2);
+  const d = db.getDocument(id);
+  assert.equal(d?.chunkCount, 2);
+  assert.equal(d?.embedModel, 'new');
+  assert.equal(d?.embedDim, 3);
+  assert.ok(db.getDocumentText(id).includes('新块一'));
+  assert.ok(!db.getDocumentText(id).includes('旧块'));
+});
+
+test('backupDatabase 生成一致性快照，restoreDatabase 可整体回滚', () => {
+  db.insertDocument('备份节点A', 'txt', 1, [{ text: 'a', vec: new Float32Array([1]) }]);
+  const countA = db.documentCount();
+  const buf = db.backupDatabase();
+  assert.equal(buf.subarray(0, 16).toString('utf8'), 'SQLite format 3\u0000', '应为 SQLite 文件');
+  db.insertDocument('备份节点B', 'txt', 1, [{ text: 'b', vec: new Float32Array([1]) }]);
+  assert.equal(db.documentCount(), countA + 1);
+  db.restoreDatabase(buf);
+  assert.equal(db.documentCount(), countA, '恢复后应回到快照状态');
+  assert.equal(db.listDocuments()[0]?.name, '备份节点A');
+  db.insertDocument('恢复后写入', 'txt', 1, [{ text: 'c', vec: new Float32Array([1]) }]);
+  assert.equal(db.documentCount(), countA + 1, '恢复后写路径正常');
+});
+
+test('restoreDatabase 拒绝非 SQLite 文件', () => {
+  assert.throws(() => db.restoreDatabase(Buffer.from('not a database file')), /SQLite/);
+  assert.equal(db.documentCount() > 0, true, '原库不受影响');
+});

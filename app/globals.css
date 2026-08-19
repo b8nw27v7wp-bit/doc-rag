@@ -4,6 +4,15 @@
   color-scheme: light;
 }
 
+/* 深色模式：整页反色 + 色相回旋（近灰度界面下观感良好，零组件改造） */
+html.dark {
+  color-scheme: dark;
+}
+html.dark body {
+  filter: invert(0.92) hue-rotate(180deg);
+  background: #fff;
+}
+
 body {
   background: #fff;
   color: #1d1d1f;

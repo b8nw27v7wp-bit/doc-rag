@@ -1,9 +1,14 @@
 /**
  * 混合检索：向量语义检索 + BM25 关键词检索，RRF（Reciprocal Rank Fusion）融合。
  * RRF 只依赖排名无需分数归一，对两种分数尺度不同的检索器天然友好。
+ * 支持：
+ *  - 可复用预建 BM25 索引（多查询检索避免重复分词）
+ *  - 空向量占位（维度不兼容的旧块只参与关键词检索）
+ *  - ANN（IVF-Lite）加速向量候选筛选（大库门控启用）
  */
-import { topK } from './vector';
 import { BM25Index } from './bm25';
+import type { AnnIndex } from './ann';
+import { annCandidateIndices } from './ann';
 
 export interface FusionHit {
   index: number;
@@ -13,7 +18,8 @@ export interface FusionHit {
 }
 
 export interface HybridParams {
-  embeddings: Float32Array[];
+  /** 与 texts 对齐；元素为 null 时该块不参与向量检索（仅关键词） */
+  embeddings: (Float32Array | null)[];
   texts: string[];
   queryEmbedding: Float32Array;
   query: string;
@@ -22,6 +28,9 @@ export interface HybridParams {
   rrfK?: number;
   /** 可复用的 BM25 索引（多查询检索时避免重复分词） */
   bm25?: BM25Index;
+  /** 可选 ANN 索引，用于大库时缩小向量扫描范围 */
+  ann?: AnnIndex;
+  annProbe?: number;
 }
 
 const RRF_K = 60;
@@ -35,10 +44,30 @@ export function hybridSearch(params: HybridParams): FusionHit[] {
   const k = params.k ?? 6;
   // 各检索器多取一些候选再融合（避免 top-k 截断漏掉单侧高排名项）
   const candidateN = Math.max(k * 3, 12);
-  const vecHits = topK(params.embeddings, params.queryEmbedding, candidateN, params.vectorMin ?? 0.18);
+  const vectorMin = params.vectorMin ?? 0.18;
+  const rrfK = params.rrfK ?? RRF_K;
+
+  // ── 向量侧：ANN 探测缩小范围（可选），跳过空向量 ──
+  let probed: Set<number> | null = null;
+  if (params.ann && params.ann.nlist > 0) {
+    probed = new Set(annCandidateIndices(params.ann, params.queryEmbedding, params.annProbe ?? 4));
+  }
+  const vecHits: { index: number; score: number }[] = [];
+  for (let i = 0; i < params.embeddings.length; i++) {
+    if (probed && !probed.has(i)) continue;
+    const v = params.embeddings[i];
+    if (!v) continue;
+    let s = 0;
+    const n = Math.min(v.length, params.queryEmbedding.length);
+    for (let d = 0; d < n; d++) s += v[d] * params.queryEmbedding[d];
+    if (s >= vectorMin) vecHits.push({ index: i, score: s });
+  }
+  vecHits.sort((a, b) => b.score - a.score);
+  vecHits.length = Math.min(vecHits.length, candidateN);
+
+  // ── 关键词侧：BM25（可选复用预建索引）──
   const bm25 = params.bm25 ?? buildBM25Index(params.texts);
   const kwHits = bm25.search(params.query, candidateN);
-  const rrfK = params.rrfK ?? RRF_K;
 
   const agg = new Map<number, { rrf: number; vectorScore: number; keywordScore: number }>();
   vecHits.forEach((h, rank) => {

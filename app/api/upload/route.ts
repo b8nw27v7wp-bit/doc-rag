@@ -1,12 +1,13 @@
-/** 上传解析：multipart → 解析 → 分块 → 本地嵌入 → 入库（支持多文件） */
+/** 上传解析：multipart → 解析 → 分块 → 本地嵌入（信号量并发控制）→ 入库（支持多文件） */
 import { NextRequest } from 'next/server';
 import { parseDocument } from '@/lib/parse';
 import { chunkStructured } from '@/lib/chunk';
-import { embedTexts } from '@/lib/embed';
+import { embedTexts, embedInfo } from '@/lib/embed';
 import { insertDocument, findDocumentByHash } from '@/lib/db';
 import { contentHash } from '@/lib/hash';
 import { buildContext } from '@/lib/contextualize';
 import { topKeywords } from '@/lib/keywords';
+import { embedSemaphore } from '@/lib/semaphore';
 
 export const runtime = 'nodejs';
 
@@ -67,16 +68,24 @@ export async function POST(req: NextRequest) {
       const total = structured.length;
       // 上下文检索：embedding 文本 = 上下文头（文档名·章节·位置）+ 原文
       const contexts = structured.map((s, i) => buildContext(parsed.name, s.path, i, total));
-      const vecs = await embedTexts(structured.map((s, i) => `${contexts[i]}\n\n${s.text}`));
-      const id = insertDocument(
-        parsed.name,
-        parsed.ext,
-        buf.length,
-        structured.map((s, i) => ({ text: s.text, vec: vecs[i], context: contexts[i] })),
-        hash,
-        topKeywords(parsed.text)
-      );
-      results.push({ ok: true, id, name: parsed.name, chars: parsed.charCount, chunks: total });
+      // 嵌入并发闸：避免多个上传/重嵌入任务同时压满资源
+      const release = await embedSemaphore.acquire();
+      try {
+        const vecs = await embedTexts(structured.map((s, i) => `${contexts[i]}\n\n${s.text}`));
+        const meta = embedInfo();
+        const id = insertDocument(
+          parsed.name,
+          parsed.ext,
+          buf.length,
+          structured.map((s, i) => ({ text: s.text, vec: vecs[i], context: contexts[i] })),
+          hash,
+          topKeywords(parsed.text),
+          { model: meta.model, dtype: meta.dtype, dim: vecs[0]?.length ?? meta.dim }
+        );
+        results.push({ ok: true, id, name: parsed.name, chars: parsed.charCount, chunks: total });
+      } finally {
+        release();
+      }
     } catch (e) {
       results.push({ ok: false, name: file.name, error: e instanceof Error ? e.message : String(e) });
     }
@@ -85,5 +94,6 @@ export async function POST(req: NextRequest) {
   const okCount = results.filter((r) => r.ok).length;
   const failed = results.filter((r) => !r.ok && !r.skipped).length;
   const skipped = results.filter((r) => r.skipped).length;
-  return Response.json({ results, failed, skipped }, { status: okCount === 0 ? 422 : 200 });
+  // 全部失败且有真实错误 → 422；全部跳过（重复）或部分成功 → 200
+  return Response.json({ results, failed, skipped }, { status: okCount === 0 && failed > 0 ? 422 : 200 });
 }

@@ -2,6 +2,7 @@
 
 import { useCallback, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { useT } from '@/components/locale';
 
 export interface DocItem {
   id: number;
@@ -34,6 +35,7 @@ interface DocContent {
 
 export default function DocBrowser({ docs }: { docs: DocItem[] }) {
   const router = useRouter();
+  const t = useT();
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
   const [viewing, setViewing] = useState<DocContent | null>(null);
@@ -155,7 +157,7 @@ export default function DocBrowser({ docs }: { docs: DocItem[] }) {
           value={q}
           onChange={(e) => setQ(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && void search()}
-          placeholder="全文搜索文档内容（命中段落）"
+          placeholder={t('全文搜索文档内容（命中段落）')}
           className="h-9 min-w-0 flex-1 rounded-lg bg-[#f5f5f7] px-3 text-[13px] outline-none focus:bg-[#ebebee]"
         />
         <button
@@ -163,7 +165,7 @@ export default function DocBrowser({ docs }: { docs: DocItem[] }) {
           disabled={!q.trim() || searching}
           className="h-9 shrink-0 rounded-lg bg-[#1d1d1f] px-4 text-[13px] font-medium text-white transition-opacity hover:opacity-85 disabled:opacity-30"
         >
-          {searching ? '搜索中…' : '搜索'}
+          {searching ? t('搜索中…') : t('搜索')}
         </button>
       </div>
 
@@ -174,10 +176,11 @@ export default function DocBrowser({ docs }: { docs: DocItem[] }) {
         <div className="rounded-xl bg-[#fafafc] p-3">
           <div className="mb-2 flex items-center justify-between">
             <p className="text-[12px] font-medium text-[#6e6e73]">
-              命中 {results.length} 处{results.length === 0 ? '（无结果）' : ''}
+              {t('命中 {n} 处', { n: results.length })}
+              {results.length === 0 ? t('（无结果）') : ''}
             </p>
             <button onClick={clearSearch} className="text-[12px] text-[#86868b] hover:text-[#1d1d1f]">
-              清除
+              {t('清除')}
             </button>
           </div>
           {results.length > 0 && (
@@ -195,7 +198,7 @@ export default function DocBrowser({ docs }: { docs: DocItem[] }) {
                     onClick={() => void view(r.docId)}
                     className="shrink-0 text-[12px] text-[#0057b8] hover:underline"
                   >
-                    查看
+                    {t('查看')}
                   </button>
                 </li>
               ))}
@@ -208,7 +211,7 @@ export default function DocBrowser({ docs }: { docs: DocItem[] }) {
       <div className="flex items-center justify-between">
         <label className="flex items-center gap-2 text-[13px] text-[#6e6e73]">
           <input type="checkbox" checked={allSelected} onChange={toggleAll} className="accent-[#1d1d1f]" />
-          全选
+          {t('全选')}
         </label>
         {selected.size > 0 ? (
           <button
@@ -216,16 +219,16 @@ export default function DocBrowser({ docs }: { docs: DocItem[] }) {
             disabled={bulkBusy}
             className="rounded-lg bg-[#d93025] px-3 py-1.5 text-[12px] font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-40"
           >
-            删除选中的 {selected.size} 份文档
+            {t('删除选中的 {n} 份文档', { n: selected.size })}
           </button>
         ) : (
-          <span className="text-[12px] text-[#a1a1a6]">勾选文档可批量删除</span>
+          <span className="text-[12px] text-[#a1a1a6]">{t('勾选文档可批量删除')}</span>
         )}
       </div>
 
       {/* 文档列表 */}
       {docs.length === 0 ? (
-        <p className="py-6 text-[13px] text-[#86868b]">暂无文档，拖入文件开始。</p>
+        <p className="py-6 text-[13px] text-[#86868b]">{t('暂无文档，拖入文件开始。')}</p>
       ) : (
         <ul className="divide-y divide-[#f0f0f2]">
           {docs.map((d) => {
@@ -263,13 +266,13 @@ export default function DocBrowser({ docs }: { docs: DocItem[] }) {
                   className="rounded-lg px-2 py-1 text-[13px] text-[#86868b] opacity-0 transition-opacity hover:bg-[#f5f5f7] hover:text-[#1d1d1f] group-hover:opacity-100 disabled:opacity-30"
                   title={d.summary ? '重新生成摘要' : '用 LLM 生成一句话摘要'}
                 >
-                  {summarizingId === d.id ? '生成中…' : d.summary ? '重述' : '摘要'}
+                  {summarizingId === d.id ? t('生成中…') : d.summary ? t('重述') : t('摘要')}
                 </button>
                 <button
                   onClick={() => void view(d.id)}
                   className="rounded-lg px-2 py-1 text-[13px] text-[#86868b] opacity-0 transition-opacity hover:bg-[#f5f5f7] hover:text-[#0057b8] group-hover:opacity-100"
                 >
-                  查看
+                  {t('查看')}
                 </button>
                 <button
                   onClick={() => void remove([d.id])}
@@ -292,11 +295,11 @@ export default function DocBrowser({ docs }: { docs: DocItem[] }) {
             <div className="mb-3 flex items-center justify-between">
               <h3 className="min-w-0 truncate text-[15px] font-semibold">{viewing?.name ?? '加载中…'}</h3>
               <button onClick={() => setViewing(null)} className="rounded-lg px-2 py-1 text-[13px] text-[#86868b] hover:bg-[#f5f5f7]">
-                关闭
+                {t('关闭')}
               </button>
             </div>
             {viewLoading ? (
-              <p className="py-10 text-center text-[13px] text-[#86868b]">加载原文…</p>
+              <p className="py-10 text-center text-[13px] text-[#86868b]">{t('加载原文…')}</p>
             ) : (
               <div className="min-h-0 flex-1 overflow-y-auto whitespace-pre-wrap rounded-xl bg-[#fafafc] p-4 text-[13px] leading-relaxed text-[#3a3a3c]">
                 {viewing?.text}

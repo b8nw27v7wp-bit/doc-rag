@@ -10,7 +10,7 @@ const spec = {
   openapi: '3.1.0',
   info: {
     title: 'DocRAG API',
-    version: '0.6.0',
+    version: '0.8.0',
     description:
       '本地优先的 RAG 文档问答 API：上传文档、混合检索问答、会话管理、全文搜索与导出。',
   },
@@ -56,6 +56,24 @@ const spec = {
           content: { 'application/json': { schema: { type: 'object', properties: { id: { type: 'integer' } }, required: ['id'] } } },
         },
         responses: { '200': { description: '摘要文本' }, '400': { description: '参数/密钥缺失' } },
+      },
+    },
+    '/api/documents/reembed': {
+      post: {
+        summary: '重新嵌入文档（换模型后重建向量）',
+        requestBody: {
+          required: true,
+          content: { 'application/json': { schema: { type: 'object', properties: { id: { type: 'integer' } }, required: ['id'] } } },
+        },
+        responses: { '200': { description: '重建前后块数' } },
+      },
+    },
+    '/api/backup': {
+      get: { summary: '下载数据库一致性快照（VACUUM INTO）', responses: { '200': { description: 'SQLite 文件下载' } } },
+      post: {
+        summary: '上传备份文件恢复数据',
+        requestBody: { required: true, content: { 'multipart/form-data': { schema: { type: 'object', properties: { file: { type: 'string', format: 'binary' } } } } } },
+        responses: { '200': { description: '恢复后统计' }, '400': { description: '无效的备份文件' } },
       },
     },
     '/api/search': {

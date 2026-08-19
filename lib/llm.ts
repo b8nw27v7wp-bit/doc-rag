@@ -15,19 +15,52 @@ export interface ChatMsg {
   content: string;
 }
 
+/** SSE data 帧解析结果（支持推理模型的 reasoning_content） */
+export interface SsePayload {
+  delta?: string;
+  reasoning?: string;
+}
+
+/** 解析单条 SSE data JSON；无法解析返回空对象 */
+export function parseSsePayload(payload: string): SsePayload {
+  try {
+    const json = JSON.parse(payload) as {
+      choices?: { delta?: { content?: string; reasoning_content?: string } }[];
+    };
+    const d = json.choices?.[0]?.delta;
+    return { delta: d?.content, reasoning: d?.reasoning_content };
+  } catch {
+    return {};
+  }
+}
+
+export interface StreamOptions {
+  /** 外部中止信号（客户端停止） */
+  signal?: AbortSignal;
+  /** 单次调用总超时（默认 120s） */
+  timeoutMs?: number;
+  /** 采样温度（默认 0.3） */
+  temperature?: number;
+  /** 最大生成 token 数（缺省用服务商默认） */
+  maxTokens?: number;
+  /** 推理模型思考内容回调（如 deepseek-reasoner） */
+  onReasoning?: (text: string) => void;
+}
+
 /**
  * 流式对话。onDelta 逐段回调累积文本，返回完整回答。
  * 解析 SSE（data: {...} → delta.content），兼容 [DONE] 结束标记。
- * @param timeoutMs 单次调用总超时（默认 120s）；超时抛「生成超时」，外部主动中止抛 AbortError
+ * 超时抛「生成超时」，外部主动中止抛 AbortError；推理模型思考内容经 onReasoning 单独回调。
  */
 export async function streamChat(
   config: LLMConfig,
   messages: ChatMsg[],
   onDelta: (text: string) => void,
-  signal?: AbortSignal,
-  timeoutMs = 120_000
+  opts: StreamOptions = {}
 ): Promise<string> {
-  const external = signal;
+  const external = opts.signal;
+  const timeoutMs = opts.timeoutMs ?? 120_000;
+  const temperature = opts.temperature ?? 0.3;
   const timeoutSignal = AbortSignal.timeout(timeoutMs);
   const combined = external ? AbortSignal.any([external, timeoutSignal]) : timeoutSignal;
 
@@ -42,7 +75,8 @@ export async function streamChat(
       model: config.model,
       messages,
       stream: true,
-      temperature: 0.3,
+      temperature,
+      ...(opts.maxTokens ? { max_tokens: opts.maxTokens } : {}),
     }),
     signal: combined,
   });
@@ -69,17 +103,11 @@ export async function streamChat(
         if (!line.startsWith('data:')) continue;
         const payload = line.slice(5).trim();
         if (payload === '[DONE]') continue;
-        try {
-          const json = JSON.parse(payload) as {
-            choices?: { delta?: { content?: string } }[];
-          };
-          const delta = json.choices?.[0]?.delta?.content;
-          if (delta) {
-            full += delta;
-            onDelta(delta);
-          }
-        } catch {
-          // 忽略无法解析的帧
+        const parsed = parseSsePayload(payload);
+        if (parsed.reasoning && opts.onReasoning) opts.onReasoning(parsed.reasoning);
+        if (parsed.delta) {
+          full += parsed.delta;
+          onDelta(parsed.delta);
         }
       }
     }

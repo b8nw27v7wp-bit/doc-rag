@@ -9,10 +9,23 @@ export interface ResolvedLlmConfig {
   apiKey: string;
   baseURL: string;
   model: string;
+  /** 采样温度（null = 使用默认 0.3） */
+  temperature: number | null;
+  /** 最大生成 token（null = 服务商默认） */
+  maxTokens: number | null;
+  /** 单次调用超时 ms */
+  timeoutMs: number;
 }
 
 export const DEFAULT_BASE_URL = 'https://api.deepseek.com/v1';
 export const DEFAULT_MODEL = 'deepseek-chat';
+
+function envNumber(name: string): number | null {
+  const raw = process.env[name];
+  if (!raw) return null;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : null;
+}
 
 /** 解析 LLM 配置；baseURL 非法时抛 UnsafeBaseUrlError */
 export function resolveLlmConfig(req: NextRequest): ResolvedLlmConfig {
@@ -23,5 +36,8 @@ export function resolveLlmConfig(req: NextRequest): ResolvedLlmConfig {
     apiKey: req.headers.get('x-api-key')?.trim() || process.env.LLM_API_KEY?.trim() || '',
     baseURL,
     model: req.headers.get('x-model')?.trim() || process.env.LLM_MODEL?.trim() || DEFAULT_MODEL,
+    temperature: envNumber('LLM_TEMPERATURE'),
+    maxTokens: envNumber('LLM_MAX_TOKENS'),
+    timeoutMs: envNumber('LLM_TIMEOUT_MS') ?? 120_000,
   };
 }

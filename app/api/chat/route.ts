@@ -32,11 +32,18 @@ import { streamChat, chatOnce, type ChatMsg } from '@/lib/llm';
 import { buildQueryExpansionPrompt, parseQueryLines, MAX_QUERIES } from '@/lib/multiQuery';
 import { resolveLlmConfig, type ResolvedLlmConfig } from '@/lib/llm-config';
 import { isLocalBaseURL, UnsafeBaseUrlError } from '@/lib/ssrf';
+import { checkCitations } from '@/lib/citations';
+import { buildAnnIndex, recommendedAnnParams, type AnnIndex } from '@/lib/ann';
+import { parsePositiveInt, parseTemperature } from '@/lib/validate';
 
 export const runtime = 'nodejs';
 
 /** 单条问题长度上限（防超长消息撑爆上下文/滥用） */
 const MAX_MESSAGE_LEN = 4000;
+/** ANN 加速的最小候选块数（低于此值用精确暴力检索）；0 表示禁用 */
+const ANN_MIN_CHUNKS = Number(process.env.ANN_MIN_CHUNKS) || 2000;
+/** 语料快照 → ANN 索引缓存（allChunks 引用稳定，变更后自然失效） */
+const annCache = new WeakMap<object, AnnIndex>();
 
 interface ChatBody {
   message?: string;
@@ -44,6 +51,10 @@ interface ChatBody {
   docIds?: number[];
   /** 是否启用多查询检索（LLM 改写，失败时自动回退单查询） */
   expand?: boolean;
+  /** 采样温度（可选，覆盖服务端默认） */
+  temperature?: number;
+  /** 最大生成 token 数（可选） */
+  maxTokens?: number;
 }
 
 export async function POST(req: NextRequest) {
@@ -129,21 +140,48 @@ export async function POST(req: NextRequest) {
           }
         }
 
-        const embeddings = candidates.map((c) => c.embedding);
+        const qvecFirst = await embedText(message);
         const texts = candidates.map((c) => c.text);
         // BM25 索引只建一次，跨查询复用（多查询检索不再重复分词）
         const bm25 = buildBM25Index(texts);
+
+        // 嵌入维度一致性：旧模型生成的块跳过向量检索（仅关键词召回）并提示
+        const dimMask = candidates.map((c) => c.embedding.length === qvecFirst.length);
+        const legacyCount = candidates.length - dimMask.filter(Boolean).length;
+        if (legacyCount > 0) {
+          send({
+            type: 'warning',
+            message: `文档库存在 ${legacyCount} 块由其他嵌入模型生成（向量维度不一致），已仅按关键词召回，建议对相关文档重新入库`,
+          });
+        }
+        const embeddings = candidates.map((c, i) => (dimMask[i] ? c.embedding : null));
+
+        // 大库 + 无范围过滤 + 维度一致时启用 ANN 加速（索引随语料快照缓存复用）
+        let ann: AnnIndex | undefined;
+        if (scopeDocIds.length === 0 && legacyCount === 0 && ANN_MIN_CHUNKS > 0 && candidates.length >= ANN_MIN_CHUNKS) {
+          ann = annCache.get(candidates);
+          if (!ann) {
+            const { nlist } = recommendedAnnParams(candidates.length);
+            ann = buildAnnIndex(candidates.map((c) => c.embedding), { nlist });
+            annCache.set(candidates, ann);
+          }
+        }
+        const { nprobe } = recommendedAnnParams(candidates.length);
+
         const fusedByQuery: FusionHit[][] = [];
-        for (const q of queries.slice(0, MAX_QUERIES + 1)) {
-          const qvec = await embedText(q);
+        const effectiveQueries = queries.slice(0, MAX_QUERIES + 1);
+        for (let qi = 0; qi < effectiveQueries.length; qi++) {
+          const qvec = qi === 0 ? qvecFirst : await embedText(effectiveQueries[qi]);
           const hits = hybridSearch({
             embeddings,
             texts,
             queryEmbedding: qvec,
-            query: q,
+            query: effectiveQueries[qi],
             k: RAG_TOP_K * 3,
             vectorMin: RAG_MIN_SCORE,
             bm25,
+            ann,
+            annProbe: nprobe,
           });
           if (hits.length > 0) fusedByQuery.push(hits);
         }
@@ -161,7 +199,7 @@ export async function POST(req: NextRequest) {
           items: fused.map((h) => ({
             index: h.index,
             score: h.rrf,
-            vector: candidates[h.index].embedding,
+            vector: dimMask[h.index] ? candidates[h.index].embedding : null,
             docId: candidates[h.index].docId,
           })),
           k: RAG_TOP_K,
@@ -191,12 +229,39 @@ export async function POST(req: NextRequest) {
         // 回传会话 id（前端无会话请求时用于自动绑定）
         send({ type: 'session', id: sessionId });
 
+        // LLM 生成：温度/最大 token 可请求级覆盖；推理模型思考内容经 reasoning 事件透传
+        const temperature = parseTemperature(body.temperature ?? undefined, cfg.temperature) ?? 0.3;
+        const maxTokens =
+          body.maxTokens !== undefined ? parsePositiveInt(body.maxTokens, 100_000) : cfg.maxTokens;
         const messages = buildRagMessages(message, sources, history);
-        const answer = await streamChat(cfg, messages, (t) => send({ type: 'delta', text: t }), req.signal);
+        let reasoning = '';
+        const answer = await streamChat(
+          cfg,
+          messages,
+          (t) => send({ type: 'delta', text: t }),
+          {
+            signal: req.signal,
+            timeoutMs: cfg.timeoutMs,
+            temperature,
+            maxTokens: maxTokens ?? undefined,
+            onReasoning: (t) => {
+              reasoning += t;
+              send({ type: 'reasoning', text: t });
+            },
+          }
+        );
         answered = true;
         const refs = extractRefs(answer);
-        send({ type: 'sources', sources, refs });
-        // 存档回答（含引用来源 JSON）
+        // 引用可信度：越界编号（模型编造的来源）单独回报，前端据此不渲染假引用
+        const citation = checkCitations(answer, sources.length);
+        send({
+          type: 'sources',
+          sources,
+          refs,
+          ...(citation.invalid.length > 0 ? { invalidRefs: citation.invalid } : {}),
+        });
+        // 存档回答（含引用来源 JSON；思考内容不落盘）
+        void reasoning;
         appendMessage(sessionId, 'assistant', answer, JSON.stringify(sources));
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
