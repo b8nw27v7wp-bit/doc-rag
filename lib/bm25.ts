@@ -23,12 +23,14 @@ export interface BM25Hit {
  * 前缀让三类 token 互不冲突；单字 df 高、idf 低，天然权重小。
  */
 export function tokenize(text: string): string[] {
-  const lower = text.toLowerCase();
+  // 全角字符归一化为半角，便于英文/数字匹配
+  const normalized = text.toLowerCase().replace(/[Ａ-Ｚａ-ｚ０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0));
   const tokens: string[] = [];
-  for (const m of lower.matchAll(/[a-z0-9]+/g)) {
+  for (const m of normalized.matchAll(/[a-z0-9]+/g)) {
     tokens.push(`w:${m[0]}`);
   }
-  for (const seq of lower.match(/[\u4e00-\u9fff]+/g) ?? []) {
+  // 覆盖全部汉字（含扩展 A/B 等），使用 Unicode Script 属性
+  for (const seq of normalized.match(/\p{Script=Han}+/gu) ?? []) {
     for (let i = 0; i < seq.length - 1; i++) {
       tokens.push(`b:${seq.slice(i, i + 2)}`);
     }
@@ -81,9 +83,8 @@ export class BM25Index {
       const posting = this.postings.get(t);
       if (!posting || posting.length === 0) continue;
       const df = this.df.get(t) ?? 0;
-      // 平滑 idf，避免除零；df 过高（超半数字档）时自然压低
+      // 平滑 idf（Lucene 风格），恒 >0
       const idf = Math.log(1 + (this.N - df + 0.5) / (df + 0.5));
-      if (idf <= 0) continue;
       for (const { i, tf } of posting) {
         const denom = tf + K1 * (1 - B + B * (this.tokenized[i].length / this.avgdl));
         scores.set(i, (scores.get(i) ?? 0) + (idf * (tf * (K1 + 1))) / denom);

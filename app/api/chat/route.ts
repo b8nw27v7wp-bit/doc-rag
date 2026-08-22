@@ -33,15 +33,24 @@ import { buildQueryExpansionPrompt, parseQueryLines, MAX_QUERIES } from '@/lib/m
 import { resolveLlmConfig, type ResolvedLlmConfig } from '@/lib/llm-config';
 import { isLocalBaseURL, UnsafeBaseUrlError } from '@/lib/ssrf';
 import { checkCitations } from '@/lib/citations';
-import { buildAnnIndex, recommendedAnnParams, type AnnIndex } from '@/lib/ann';
-import { parsePositiveInt, parseTemperature } from '@/lib/validate';
+import { buildAnnIndex, buildAnnIndexAsync, recommendedAnnParams, type AnnIndex } from '@/lib/ann';
+import { parseDocIds, parsePositiveInt, parseTemperature } from '@/lib/validate';
+import { createRateLimiter, clientIpKey } from '@/lib/rateLimit';
 
 export const runtime = 'nodejs';
 
 /** 单条问题长度上限（防超长消息撑爆上下文/滥用） */
 const MAX_MESSAGE_LEN = 4000;
 /** ANN 加速的最小候选块数（低于此值用精确暴力检索）；0 表示禁用 */
-const ANN_MIN_CHUNKS = Number(process.env.ANN_MIN_CHUNKS) || 2000;
+function parseAnnMinChunks(): number {
+  const raw = process.env.ANN_MIN_CHUNKS;
+  if (raw === undefined || raw === '') return 2000;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) return 2000;
+  return Math.floor(n);
+}
+const ANN_MIN_CHUNKS = parseAnnMinChunks();
+const chatLimiter = createRateLimiter({ windowMs: 60_000, max: 20 });
 /** 语料快照 → ANN 索引缓存（allChunks 引用稳定，变更后自然失效） */
 const annCache = new WeakMap<object, AnnIndex>();
 
@@ -58,6 +67,9 @@ interface ChatBody {
 }
 
 export async function POST(req: NextRequest) {
+  if (!chatLimiter.tryAcquire(clientIpKey(req))) {
+    return Response.json({ error: '提问过于频繁，请稍后再试' }, { status: 429 });
+  }
   let body: ChatBody;
   try {
     body = (await req.json()) as ChatBody;
@@ -68,6 +80,24 @@ export async function POST(req: NextRequest) {
   if (!message) return Response.json({ error: '缺少 message' }, { status: 400 });
   if (message.length > MAX_MESSAGE_LEN) {
     return Response.json({ error: `问题过长（最多 ${MAX_MESSAGE_LEN} 字）` }, { status: 400 });
+  }
+  if (body.docIds !== undefined) {
+    const parsed = parseDocIds(body.docIds);
+    if (parsed === null) return Response.json({ error: 'docIds 参数无效' }, { status: 400 });
+    body.docIds = parsed;
+  }
+  if (body.maxTokens !== undefined) {
+    const v = parsePositiveInt(body.maxTokens, 100_000);
+    if (v === null) return Response.json({ error: 'maxTokens 参数无效（1~100000）' }, { status: 400 });
+    body.maxTokens = v;
+  }
+  if (body.temperature !== undefined) {
+    if (typeof body.temperature !== 'number' || body.temperature < 0 || body.temperature > 2) {
+      return Response.json({ error: 'temperature 参数无效（0~2）' }, { status: 400 });
+    }
+  }
+  if (body.expand !== undefined && typeof body.expand !== 'boolean') {
+    return Response.json({ error: 'expand 必须为布尔值' }, { status: 400 });
   }
 
   // 会话解析：无 id 自动新建；有 id 需存在
@@ -140,7 +170,9 @@ export async function POST(req: NextRequest) {
           }
         }
 
+        if (req.signal.aborted) throw new Error('请求已取消');
         const qvecFirst = await embedText(message);
+        if (req.signal.aborted) throw new Error('请求已取消');
         const texts = candidates.map((c) => c.text);
         // BM25 索引只建一次，跨查询复用（多查询检索不再重复分词）
         const bm25 = buildBM25Index(texts);
@@ -156,13 +188,17 @@ export async function POST(req: NextRequest) {
         }
         const embeddings = candidates.map((c, i) => (dimMask[i] ? c.embedding : null));
 
-        // 大库 + 无范围过滤 + 维度一致时启用 ANN 加速（索引随语料快照缓存复用）
+        // 大库 + 无范围过滤 + 维度一致时启用 ANN 加速（索引随语料快照缓存复用，异步构建避免阻塞）
         let ann: AnnIndex | undefined;
         if (scopeDocIds.length === 0 && legacyCount === 0 && ANN_MIN_CHUNKS > 0 && candidates.length >= ANN_MIN_CHUNKS) {
           ann = annCache.get(candidates);
           if (!ann) {
             const { nlist } = recommendedAnnParams(candidates.length);
-            ann = buildAnnIndex(candidates.map((c) => c.embedding), { nlist });
+            if (candidates.length >= 5000) {
+              ann = await buildAnnIndexAsync(candidates.map((c) => c.embedding), { nlist });
+            } else {
+              ann = buildAnnIndex(candidates.map((c) => c.embedding), { nlist });
+            }
             annCache.set(candidates, ann);
           }
         }
@@ -170,8 +206,16 @@ export async function POST(req: NextRequest) {
 
         const fusedByQuery: FusionHit[][] = [];
         const effectiveQueries = queries.slice(0, MAX_QUERIES + 1);
+        // 并行嵌入所有查询向量（首条已嵌入）
+        let qvecs: Float32Array[] = [qvecFirst];
+        if (effectiveQueries.length > 1) {
+          const rest = effectiveQueries.slice(1);
+          const more = await Promise.all(rest.map((q) => embedText(q)));
+          qvecs = [qvecFirst, ...more];
+        }
+        if (req.signal.aborted) throw new Error('请求已取消');
         for (let qi = 0; qi < effectiveQueries.length; qi++) {
-          const qvec = qi === 0 ? qvecFirst : await embedText(effectiveQueries[qi]);
+          const qvec = qvecs[qi];
           const hits = hybridSearch({
             embeddings,
             texts,

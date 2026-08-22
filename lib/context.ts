@@ -12,8 +12,9 @@ export interface ChunkRef {
 }
 
 export const CONTEXT_RADIUS = 1;
-/** 扩展后拼接文本的长度上限（字符），超出从尾部截断 */
-export const CONTEXT_MAX_CHARS = 800;
+/** 扩展后拼接文本的长度上限（字符），超出从尾部截断
+ * 需 ≥ 2×CHUNK_SIZE(600) 以保证满长块的邻块扩展能生效；取 1500 可容纳中心块 + 单侧邻块，兼顾 LLM 上下文长度 */
+export const CONTEXT_MAX_CHARS = 1500;
 
 /**
  * 为每个中心块生成合并了相邻块（同 docId，idx±radius）的完整上下文文本。
@@ -33,18 +34,39 @@ export function withNeighborContext(all: ChunkRef[], centers: ChunkRef[], radius
 
   return centers.map((center) => {
     const arr = byDoc.get(center.docId) ?? [center];
-    // 中心块在按 idx 排序数组中的位置；找不到时退化为仅中心文本
     const pos = arr.findIndex((c) => c.idx === center.idx);
-    const parts: string[] = [center.text];
-    if (pos >= 0) {
-      for (let r = 1; r <= radius; r++) {
-        const right = arr[pos + r];
-        if (right) parts.push(right.text);
-        const left = arr[pos - r];
-        if (left) parts.push(left.text);
+    if (pos < 0) return trimToFit(center.text, CONTEXT_MAX_CHARS);
+    const window: ChunkRef[] = [center];
+    for (let r = 1; r <= radius; r++) {
+      const right = arr[pos + r];
+      if (right) window.push(right);
+      const left = arr[pos - r];
+      if (left) window.push(left);
+    }
+    // 按原文顺序排序，保证时间线正确；中心块已在 window 中，确保不会被截断丢失
+    window.sort((a, b) => a.idx - b.idx);
+    // 若超长，优先保留中心及其最近邻，逐步剔除最远块直到fits
+    let text = window.map((c) => c.text).join('\n\n');
+    if (text.length > CONTEXT_MAX_CHARS) {
+      const sortedByDist = [...window].sort((a, b) => Math.abs(a.idx - center.idx) - Math.abs(b.idx - center.idx));
+      // 从最远端开始剔除，直到fits（始终保留中心）
+      const keep = [...sortedByDist];
+      while (keep.length > 1) {
+        const candidate = [...keep].sort((a, b) => a.idx - b.idx).map((c) => c.text).join('\n\n');
+        if (candidate.length <= CONTEXT_MAX_CHARS) {
+          text = candidate;
+          break;
+        }
+        // 移除距离最远的块
+        keep.pop();
+      }
+      if (keep.length === 1) {
+        text = trimToFit(keep[0].text, CONTEXT_MAX_CHARS);
+      } else if (text.length > CONTEXT_MAX_CHARS) {
+        text = trimToFit(text, CONTEXT_MAX_CHARS);
       }
     }
-    return trimToFit(parts.join('\n\n'), CONTEXT_MAX_CHARS);
+    return text;
   });
 }
 

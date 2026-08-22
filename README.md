@@ -50,7 +50,7 @@ npm run dev                  # http://localhost:3000
 验证安装：
 
 ```bash
-npm test                     # 157 项单元测试（含路由层集成测试）
+npm test                     # 168 项单元测试（含路由层集成测试）
 npm run build && npm start   # 生产构建
 node scripts/verify-embed.mjs        # 验证本地嵌入模型
 node scripts/verify-api.mjs          # 端到端验收（需服务已启动）
@@ -193,7 +193,7 @@ lib/
   db.ts               # node:sqlite 惰性初始化（WAL + 迁移 + 备份/恢复 + 检索缓存）
   llm.ts              # OpenAI 兼容流式/非流式调用（超时/温度/推理内容）
   rag.ts              # prompt 组装（历史注入）+ 引用提取
-tests/                # node --test（157 项，含路由层集成测试）
+tests/                # node --test（168 项，含路由层集成测试）
 scripts/
   import-cli.ts       # CLI 批量导入（目录递归 + 去重）
   verify-embed.mjs    # 嵌入模型验证

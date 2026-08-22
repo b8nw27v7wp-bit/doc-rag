@@ -33,3 +33,44 @@ export function parseTemperature(v: unknown, fallback: number | null): number | 
   if (n === null || !Number.isFinite(n) || n < 0 || n > 2) return fallback;
   return n;
 }
+
+/** 校验 docIds 数组（number[]，正整数，去重，上限 max） */
+export function parseDocIds(v: unknown, max = 200): number[] | null {
+  if (!Array.isArray(v)) return null;
+  if (v.length > max) return null;
+  const out: number[] = [];
+  for (const x of v) {
+    if (typeof x !== 'number' || !Number.isInteger(x) || x <= 0) return null;
+    if (!out.includes(x)) out.push(x);
+  }
+  return out;
+}
+
+/** 校验分页参数 */
+export function parsePagination(searchParams: URLSearchParams): { limit: number; offset: number } | null {
+  const limitRaw = searchParams.get('limit');
+  const offsetRaw = searchParams.get('offset');
+  const pageRaw = searchParams.get('page');
+  const pageSizeRaw = searchParams.get('pageSize');
+  let limit = 0;
+  let offset = 0;
+  if (limitRaw !== null) {
+    const v = Number(limitRaw);
+    if (!Number.isInteger(v) || v <= 0 || v > 500) return null;
+    limit = v;
+  }
+  if (offsetRaw !== null) {
+    const v = Number(offsetRaw);
+    if (!Number.isInteger(v) || v < 0 || v > 100000) return null;
+    offset = v;
+  }
+  if (pageRaw !== null || pageSizeRaw !== null) {
+    const page = pageRaw ? Number(pageRaw) : 1;
+    const pageSize = pageSizeRaw ? Number(pageSizeRaw) : 20;
+    if (!Number.isInteger(page) || page < 1 || page > 10000) return null;
+    if (!Number.isInteger(pageSize) || pageSize < 1 || pageSize > 100) return null;
+    limit = pageSize;
+    offset = (page - 1) * pageSize;
+  }
+  return { limit, offset };
+}

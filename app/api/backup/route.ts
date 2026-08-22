@@ -1,10 +1,12 @@
 /** 数据备份/恢复：GET = 下载一致快照（VACUUM INTO）；POST = 上传 .db 恢复 */
 import { NextRequest } from 'next/server';
 import { backupDatabase, restoreDatabase, documentCount, chunkCount } from '@/lib/db';
+import { createRateLimiter, clientIpKey } from '@/lib/rateLimit';
 
 export const runtime = 'nodejs';
 
 const MAX_RESTORE_BYTES = 500 * 1024 * 1024;
+const restoreLimiter = createRateLimiter({ windowMs: 60_000, max: 5 });
 
 export async function GET() {
   try {
@@ -22,6 +24,9 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
+  if (!restoreLimiter.tryAcquire(clientIpKey(req))) {
+    return Response.json({ error: '恢复操作过于频繁，请稍后再试' }, { status: 429 });
+  }
   let form: FormData;
   try {
     form = await req.formData();

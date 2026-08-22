@@ -53,10 +53,11 @@ export function mmrSelect(params: MMRParams): RankItem[] {
     let bestVal = -Infinity;
     for (let i = 0; i < pool.length; i++) {
       const it = pool[i];
-      let maxSim = 0;
+      let maxSim = -Infinity;
       for (const s of selected) {
         maxSim = Math.max(maxSim, sim(it, s));
       }
+      if (maxSim === -Infinity) maxSim = 0;
       const rel = it.score / maxScore;
       const mmr = lambda * rel - (1 - lambda) * maxSim;
       if (mmr > bestVal) {

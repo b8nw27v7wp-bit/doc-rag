@@ -5,14 +5,20 @@
  * 惰性初始化：模块导入零副作用（Next 构建期不触发数据库访问，避免多 worker 锁冲突）。
  */
 import { DatabaseSync } from 'node:sqlite';
-import { mkdirSync, statSync, writeFileSync, readFileSync, rmSync, copyFileSync, existsSync } from 'node:fs';
+import { mkdirSync, statSync, writeFileSync, readFileSync, rmSync, copyFileSync, existsSync, renameSync, fsyncSync, openSync, closeSync } from 'node:fs';
 import path from 'node:path';
 import { bytesToF32 } from './vector';
 
 const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), 'data');
-mkdirSync(DATA_DIR, { recursive: true });
 
 let db: DatabaseSync | null = null;
+
+function ensureDataDir(): void {
+  if (DATA_DIR.includes("'") || DATA_DIR.includes('\n') || DATA_DIR.includes('\r')) {
+    throw new Error('DATA_DIR 包含非法字符');
+  }
+  mkdirSync(DATA_DIR, { recursive: true });
+}
 
 // 检索语料内存缓存：避免每次提问都重读 SQLite 并把嵌入 BLOB 反序列化为 Float32Array。
 // 文档增删时置空，下次访问重建。
@@ -23,6 +29,7 @@ function invalidateChunks(): void {
 
 function getDb(): DatabaseSync {
   if (!db) {
+    ensureDataDir();
     const d = new DatabaseSync(path.join(DATA_DIR, 'app.db'));
     d.exec('PRAGMA journal_mode = WAL;');
     d.exec('PRAGMA busy_timeout = 5000;');
@@ -157,7 +164,9 @@ export interface ChunkRecord {
 }
 
 function f32ToU8(v: Float32Array): Uint8Array {
-  return new Uint8Array(v.buffer, v.byteOffset, v.byteLength);
+  const copy = new Uint8Array(v.byteLength);
+  copy.set(new Uint8Array(v.buffer, v.byteOffset, v.byteLength));
+  return copy;
 }
 
 /** 写入一个文档及其全部向量块，事务提交；contentHash 用于重复检测；context 为上下文头；keywords 为标签 */
@@ -171,37 +180,37 @@ export function insertDocument(
   embeddedWith?: EmbedMeta
 ): number {
   const d = getDb();
-  const docId = Number(
-    d
-      .prepare(
-        'INSERT INTO documents (name, ext, size, char_count, chunk_count, content_hash, keywords, embed_model, embed_dtype, embed_dim) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-      )
-      .run(
-        name,
-        ext,
-        size,
-        chunks.reduce((a, c) => a + c.text.length, 0),
-        chunks.length,
-        contentHash,
-        keywords.join(','),
-        embeddedWith?.model ?? null,
-        embeddedWith?.dtype ?? null,
-        embeddedWith?.dim ?? null
-      ).lastInsertRowid
-  );
-  const ins = d.prepare('INSERT INTO chunks (doc_id, idx, text, context, embedding) VALUES (?, ?, ?, ?, ?)');
   d.exec('BEGIN');
   try {
+    const docId = Number(
+      d
+        .prepare(
+          'INSERT INTO documents (name, ext, size, char_count, chunk_count, content_hash, keywords, embed_model, embed_dtype, embed_dim) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+        )
+        .run(
+          name,
+          ext,
+          size,
+          chunks.reduce((a, c) => a + c.text.length, 0),
+          chunks.length,
+          contentHash,
+          keywords.join(','),
+          embeddedWith?.model ?? null,
+          embeddedWith?.dtype ?? null,
+          embeddedWith?.dim ?? null
+        ).lastInsertRowid
+    );
+    const ins = d.prepare('INSERT INTO chunks (doc_id, idx, text, context, embedding) VALUES (?, ?, ?, ?, ?)');
     for (let i = 0; i < chunks.length; i++) {
       ins.run(docId, i, chunks[i].text, chunks[i].context ?? null, f32ToU8(chunks[i].vec));
     }
     d.exec('COMMIT');
+    invalidateChunks();
+    return docId;
   } catch (e) {
-    d.exec('ROLLBACK');
+    try { d.exec('ROLLBACK'); } catch {}
     throw e;
   }
-  invalidateChunks();
-  return docId;
 }
 
 /** 重新嵌入：替换文档全部分块与嵌入元信息（保留文档元信息与摘要），返回新块数 */
@@ -346,19 +355,49 @@ export function chunkCount(): number {
   return Number(row.n);
 }
 
-/** 删除文档（级联删除其向量块） */
-export function deleteDocument(id: number): void {
-  getDb().prepare('DELETE FROM documents WHERE id = ?').run(id);
-  invalidateChunks();
+/** 清理会话中对已删除文档的引用 */
+function cleanupSessionDocIds(deletedIds: number[]): void {
+  if (deletedIds.length === 0) return;
+  const delSet = new Set(deletedIds);
+  const d = getDb();
+  const rows = d.prepare("SELECT id, doc_ids FROM sessions WHERE doc_ids != ''").all() as { id: number; doc_ids: string }[];
+  for (const r of rows) {
+    const ids = parseDocIds(r.doc_ids);
+    const filtered = ids.filter((x) => !delSet.has(x));
+    if (filtered.length !== ids.length) {
+      d.prepare('UPDATE sessions SET doc_ids = ? WHERE id = ?').run(filtered.join(','), r.id);
+    }
+  }
 }
 
-/** 批量删除文档（级联删除向量块），返回实际删除数 */
+/** 删除文档（级联删除其向量块） */
+export function deleteDocument(id: number): void {
+  const d = getDb();
+  const res = d.prepare('DELETE FROM documents WHERE id = ?').run(id);
+  if (Number(res.changes) > 0) {
+    cleanupSessionDocIds([id]);
+    invalidateChunks();
+  }
+}
+
+/** 批量删除文档（级联删除向量块），返回实际删除数（事务保证一致性） */
 export function deleteDocuments(ids: number[]): number {
   if (ids.length === 0) return 0;
   const placeholders = ids.map(() => '?').join(',');
-  const res = getDb().prepare(`DELETE FROM documents WHERE id IN (${placeholders})`).run(...ids);
-  if (Number(res.changes) > 0) invalidateChunks();
-  return Number(res.changes);
+  const d = getDb();
+  d.exec('BEGIN');
+  try {
+    const res = d.prepare(`DELETE FROM documents WHERE id IN (${placeholders})`).run(...ids);
+    if (Number(res.changes) > 0) {
+      cleanupSessionDocIds(ids);
+      invalidateChunks();
+    }
+    d.exec('COMMIT');
+    return Number(res.changes);
+  } catch (e) {
+    d.exec('ROLLBACK');
+    throw e;
+  }
 }
 
 /** 按名称 + 内容哈希查找重复文档，返回已存在文档 id（无则 null） */
@@ -460,10 +499,18 @@ export function allChunks(): ChunkRecord[] {
   return chunkCache;
 }
 
-/** 数据库文件大小（README/页面展示用） */
+/** 数据库文件大小（README/页面展示用，含 WAL/SHM） */
 export function dbSizeBytes(): number {
   try {
-    return statSync(path.join(DATA_DIR, 'app.db')).size;
+    let total = 0;
+    for (const f of ['app.db', 'app.db-wal', 'app.db-shm']) {
+      try {
+        total += statSync(path.join(/* turbopackIgnore: true */ DATA_DIR, f)).size;
+      } catch {
+        // 文件不存在时忽略
+      }
+    }
+    return total;
   } catch {
     return 0;
   }
@@ -472,6 +519,8 @@ export function dbSizeBytes(): number {
 /** 通过 VACUUM INTO 生成一致性备份（写临时文件后读回，含 WAL 已合并数据） */
 export function backupDatabase(): Buffer {
   const d = getDb();
+  // 校验 DATA_DIR 合法性，避免路径注入通过 SQL
+  if (DATA_DIR.includes("'") || DATA_DIR.includes('\n')) throw new Error('DATA_DIR 非法');
   const target = path.join(DATA_DIR, `backup-${Date.now()}-${Math.random().toString(36).slice(2)}.db`);
   try {
     d.exec(`VACUUM INTO '${target.replace(/'/g, "''")}'`);
@@ -486,14 +535,17 @@ export function backupDatabase(): Buffer {
 }
 
 /**
- * 恢复数据库：校验 SQLite 文件头 → 关闭当前连接 → 现库快照为 pre-restore → 写入新库 → 重开。
+ * 恢复数据库：校验 SQLite 文件头 → 关闭当前连接 → 现库快照为 pre-restore → 原子写入新库 → 校验 → 重开。
+ * 写入采用 tmp + fsync + rename 原子替换，避免半写入导致数据丢失。
  * 注意：恢复会用备份文件完全替换当前数据。
  */
 export function restoreDatabase(buf: Buffer): void {
   const header = buf.subarray(0, 16).toString('utf8');
   if (header !== 'SQLite format 3\u0000') throw new Error('不是有效的 SQLite 数据库文件');
+  ensureDataDir();
   const source = path.join(DATA_DIR, 'app.db');
   const bak = path.join(DATA_DIR, 'app.db.pre-restore');
+  const tmp = path.join(DATA_DIR, `app.db.restore-${Date.now()}-${Math.random().toString(36).slice(2)}.tmp`);
   if (db) {
     try {
       db.close();
@@ -517,8 +569,49 @@ export function restoreDatabase(buf: Buffer): void {
       }
     }
   }
-  writeFileSync(source, buf);
-  getDb(); // 重开 + 迁移
+  // 原子写入：先写 tmp，fsync，再 rename
+  try {
+    writeFileSync(tmp, buf);
+    try {
+      const fd = openSync(tmp, 'r+');
+      try {
+        fsyncSync(fd);
+      } finally {
+        closeSync(fd);
+      }
+    } catch {
+      // fsync 失败不阻断，但已写入
+    }
+    renameSync(tmp, source);
+  } catch (e) {
+    try {
+      rmSync(tmp, { force: true });
+    } catch {}
+    throw e;
+  }
+  // 重开并做完整性校验
+  const d = getDb();
+  try {
+    const row = d.prepare('PRAGMA integrity_check').get() as { integrity_check: string } | undefined;
+    const ok = row ? (row as unknown as string) === 'ok' || (row as { integrity_check: string }).integrity_check === 'ok' : false;
+    // 部分 node:sqlite 返回字符串数组，需兼容
+    if (!ok) {
+      const raw = d.prepare('PRAGMA integrity_check').all() as unknown[];
+      const first = raw[0] as { integrity_check?: string } | string | undefined;
+      const val = typeof first === 'string' ? first : (first as { integrity_check?: string })?.integrity_check;
+      if (val !== 'ok') throw new Error(`恢复后完整性校验失败: ${val ?? JSON.stringify(raw[0])}`);
+    }
+  } catch (e) {
+    // 校验失败则尝试回滚到 bak
+    try {
+      try { d.close(); } catch {}
+      db = null;
+      if (existsSync(bak)) copyFileSync(bak, source);
+    } catch {}
+    db = null;
+    invalidateChunks();
+    throw e;
+  }
 }
 
 // ────────────────────────── 会话与消息 ──────────────────────────

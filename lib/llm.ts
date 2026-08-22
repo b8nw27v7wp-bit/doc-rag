@@ -65,12 +65,11 @@ export async function streamChat(
   const combined = external ? AbortSignal.any([external, timeoutSignal]) : timeoutSignal;
 
   const base = validateBaseURL(config.baseURL);
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (config.apiKey) headers['Authorization'] = `Bearer ${config.apiKey}`;
   const res = await fetch(`${base}/chat/completions`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${config.apiKey}`,
-    },
+    headers,
     body: JSON.stringify({
       model: config.model,
       messages,
@@ -132,12 +131,11 @@ export async function chatOnce(
   timeoutMs = 30_000
 ): Promise<string> {
   const base = validateBaseURL(config.baseURL);
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (config.apiKey) headers['Authorization'] = `Bearer ${config.apiKey}`;
   const res = await fetch(`${base}/chat/completions`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${config.apiKey}`,
-    },
+    headers,
     body: JSON.stringify({ model: config.model, messages, temperature: 0.2 }),
     signal: AbortSignal.timeout(timeoutMs),
   });

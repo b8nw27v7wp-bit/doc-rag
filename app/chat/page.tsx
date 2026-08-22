@@ -29,7 +29,7 @@ function loadSettings(): Settings {
 
 export default function ChatPage() {
   const t = useT();
-  const [settings, setSettings] = useState<Settings>(loadSettings);
+  const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [input, setInput] = useState('');
@@ -56,6 +56,9 @@ export default function ChatPage() {
   }, []);
 
   useEffect(() => {
+    // hydration 修正：localStorage 仅客户端可用，需在挂载后同步
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setSettings(loadSettings());
     fetch('/api/sessions')
       .then((r) => r.json())
       .then((d) => setSessions(d.sessions ?? []))
@@ -78,15 +81,13 @@ export default function ChatPage() {
     setMsgs((prev) => prev.map((m, i) => (i === prev.length - 1 ? { ...m, ...patch } : m)));
   }, []);
 
-  const newChat = useCallback(async () => {
+  const newChat = useCallback(() => {
     abortRef.current?.abort();
-    await fetch('/api/sessions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
-    await refreshSessions();
     setCurrentId(null);
     setScopeIds([]);
     setMsgs([]);
     setNotice('');
-  }, [refreshSessions]);
+  }, []);
 
   const selectSession = useCallback(
     async (id: number) => {
@@ -260,7 +261,13 @@ export default function ChatPage() {
       }
     } catch (e) {
       if ((e as Error).name !== 'AbortError') {
-        patchLast({ content: acc || (e instanceof Error ? e.message : String(e)), error: true });
+        const msg = e instanceof Error ? e.message : String(e);
+        if (acc) {
+          patchLast({ content: acc, error: true });
+          setNotice(msg);
+        } else {
+          patchLast({ content: msg, error: true });
+        }
       }
     } finally {
       setStreaming(false);

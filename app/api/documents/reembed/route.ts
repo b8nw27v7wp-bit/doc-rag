@@ -3,7 +3,7 @@ import { NextRequest } from 'next/server';
 import { getDocument, getDocumentText, rebuildDocumentChunks } from '@/lib/db';
 import { chunkStructured } from '@/lib/chunk';
 import { embedTexts, embedInfo } from '@/lib/embed';
-import { buildContext } from '@/lib/contextualize';
+import { buildContext, contextualize } from '@/lib/contextualize';
 import { embedSemaphore } from '@/lib/semaphore';
 import { parsePositiveInt } from '@/lib/validate';
 
@@ -28,9 +28,10 @@ export async function POST(req: NextRequest) {
   const total = structured.length;
   const contexts = structured.map((s, i) => buildContext(doc.name, s.path, i, total));
 
-  const release = await embedSemaphore.acquire();
+  const release = await embedSemaphore.acquire({ timeoutMs: 120_000, signal: req.signal });
   try {
-    const vecs = await embedTexts(structured.map((s, i) => `${contexts[i]}\n\n${s.text}`));
+    if (req.signal.aborted) throw new Error('请求已取消');
+    const vecs = await embedTexts(structured.map((s, i) => contextualize(doc.name, s.path, i, total, s.text)));
     const meta = embedInfo();
     const newCount = rebuildDocumentChunks(
       id,

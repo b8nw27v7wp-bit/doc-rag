@@ -16,7 +16,7 @@ import { chunkStructured } from '../lib/chunk';
 import { embedTexts, embedInfo } from '../lib/embed';
 import { insertDocument, documentCount, chunkCount, findDocumentByHash } from '../lib/db';
 import { contentHash } from '../lib/hash';
-import { buildContext } from '../lib/contextualize';
+import { buildContext, contextualize } from '../lib/contextualize';
 import { topKeywords } from '../lib/keywords';
 import { embedSemaphore } from '../lib/semaphore';
 
@@ -87,7 +87,7 @@ async function main() {
       const contexts = structured.map((s, i) => buildContext(parsed.name, s.path, i, total));
       const release = await embedSemaphore.acquire();
       try {
-        const vecs = await embedTexts(structured.map((s, i) => `${contexts[i]}\n\n${s.text}`));
+        const vecs = await embedTexts(structured.map((s, i) => contextualize(parsed.name, s.path, i, total, s.text)));
         const meta = embedInfo();
         const id = insertDocument(
           parsed.name,

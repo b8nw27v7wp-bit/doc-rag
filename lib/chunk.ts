@@ -10,6 +10,7 @@ export const CHUNK_OVERLAP = 120;
  * @param overlap 相邻块重叠长度（字符）
  */
 export function chunkText(text: string, size = CHUNK_SIZE, overlap = CHUNK_OVERLAP): string[] {
+  if (overlap >= size) throw new Error(`overlap (${overlap}) 必须小于 size (${size})`);
   const norm = text
     .replace(/\r\n/g, '\n')
     .replace(/\u00a0/g, ' ')
@@ -25,10 +26,11 @@ export function chunkText(text: string, size = CHUNK_SIZE, overlap = CHUNK_OVERL
   let buf = '';
 
   for (const p of paragraphs) {
-    // 当前块装不下了，先落盘
+    // 当前块装不下了，先落盘并携带上一块尾部重叠
     if (buf && buf.length + p.length + 2 > size) {
       chunks.push(buf);
-      buf = p;
+      const tail = buf.slice(-overlap);
+      buf = tail ? `${tail}\n\n${p}` : p;
     } else {
       buf = buf ? `${buf}\n\n${p}` : p;
     }
@@ -72,18 +74,27 @@ export function chunkStructured(text: string, size = CHUNK_SIZE, overlap = CHUNK
     lines = [];
   };
 
+  let inFence = false;
   for (const raw of norm.split('\n')) {
-    const m = HEADING_RE.exec(raw);
-    if (m) {
-      flush();
-      // 跳级标题（如 H1 → H3）按层下钻一层处理，避免产生路径空洞
-      const level = Math.min(m[1].length, path.length + 1);
-      path.length = level - 1;
-      path[level - 1] = m[2];
-      lines = [raw];
-    } else {
+    const trimmed = raw.trimStart();
+    if (trimmed.startsWith('```') || trimmed.startsWith('~~~')) {
+      inFence = !inFence;
       lines.push(raw);
+      continue;
     }
+    if (!inFence) {
+      const m = HEADING_RE.exec(raw);
+      if (m) {
+        flush();
+        // 跳级标题（如 H1 → H3）按层下钻一层处理，避免产生路径空洞
+        const level = Math.min(m[1].length, path.length + 1);
+        path.length = level - 1;
+        path[level - 1] = m[2];
+        lines = [raw];
+        continue;
+      }
+    }
+    lines.push(raw);
   }
   flush();
 

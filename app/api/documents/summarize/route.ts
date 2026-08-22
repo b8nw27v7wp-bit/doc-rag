@@ -9,14 +9,14 @@ import { isLocalBaseURL, UnsafeBaseUrlError } from '@/lib/ssrf';
 export const runtime = 'nodejs';
 
 export async function POST(req: NextRequest) {
-  let body: { id?: number };
+  let body: { id?: unknown };
   try {
     body = (await req.json()) as typeof body;
   } catch {
     return Response.json({ error: '请求格式错误' }, { status: 400 });
   }
-  const id = Number(body.id);
-  if (!id) return Response.json({ error: '缺少 id 参数' }, { status: 400 });
+  const id = body.id !== undefined ? (typeof body.id === 'number' ? body.id : Number(body.id)) : NaN;
+  if (!Number.isInteger(id) || id <= 0) return Response.json({ error: '缺少 id 参数' }, { status: 400 });
   const doc = getDocument(id);
   if (!doc) return Response.json({ error: '文档不存在' }, { status: 404 });
   const text = getDocumentText(id);

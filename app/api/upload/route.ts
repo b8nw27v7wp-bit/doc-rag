@@ -5,15 +5,28 @@ import { chunkStructured } from '@/lib/chunk';
 import { embedTexts, embedInfo } from '@/lib/embed';
 import { insertDocument, findDocumentByHash } from '@/lib/db';
 import { contentHash } from '@/lib/hash';
-import { buildContext } from '@/lib/contextualize';
+import { buildContext, contextualize } from '@/lib/contextualize';
 import { topKeywords } from '@/lib/keywords';
 import { embedSemaphore } from '@/lib/semaphore';
+import { createRateLimiter, clientIpKey } from '@/lib/rateLimit';
 
 export const runtime = 'nodejs';
 
-const MAX_FILES = Number(process.env.MAX_FILES) || 20;
-const MAX_UPLOAD_MB = Number(process.env.MAX_UPLOAD_MB) || 50;
+function parseEnvInt(raw: string | undefined, fallback: number, min: number): number {
+  if (raw === undefined || raw === '') return fallback;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.floor(n));
+}
+const MAX_FILES = parseEnvInt(process.env.MAX_FILES, 20, 1);
+const MAX_UPLOAD_MB = parseEnvInt(process.env.MAX_UPLOAD_MB, 50, 1);
 const MAX_BYTES = MAX_UPLOAD_MB * 1024 * 1024;
+const _rawTotal = process.env.MAX_TOTAL_MB;
+const MAX_TOTAL_MB = _rawTotal !== undefined && _rawTotal !== ''
+  ? parseEnvInt(_rawTotal, Math.min(MAX_FILES * MAX_UPLOAD_MB, 200), 1)
+  : Math.min(MAX_FILES * MAX_UPLOAD_MB, 200);
+const MAX_TOTAL_BYTES = MAX_TOTAL_MB * 1024 * 1024;
+const uploadLimiter = createRateLimiter({ windowMs: 60_000, max: 30 });
 
 interface UploadResult {
   ok: boolean;
@@ -27,6 +40,9 @@ interface UploadResult {
 }
 
 export async function POST(req: NextRequest) {
+  if (!uploadLimiter.tryAcquire(clientIpKey(req))) {
+    return Response.json({ error: '上传过于频繁，请稍后再试' }, { status: 429 });
+  }
   let form: FormData;
   try {
     form = await req.formData();
@@ -40,6 +56,11 @@ export async function POST(req: NextRequest) {
 
   if (files.length === 0) {
     return Response.json({ error: '未选择文件' }, { status: 400 });
+  }
+  // 总量保护：避免 20*50MB 瞬间打爆容器内存
+  const totalBytes = files.reduce((s, f) => s + (typeof f.size === 'number' ? f.size : 0), 0);
+  if (totalBytes > MAX_TOTAL_BYTES) {
+    return Response.json({ error: `本次上传总量 ${Math.round(totalBytes / 1024 / 1024)}MB 超过上限 ${MAX_TOTAL_MB}MB，请分批上传` }, { status: 413 });
   }
 
   const results: UploadResult[] = [];
@@ -68,10 +89,11 @@ export async function POST(req: NextRequest) {
       const total = structured.length;
       // 上下文检索：embedding 文本 = 上下文头（文档名·章节·位置）+ 原文
       const contexts = structured.map((s, i) => buildContext(parsed.name, s.path, i, total));
-      // 嵌入并发闸：避免多个上传/重嵌入任务同时压满资源
-      const release = await embedSemaphore.acquire();
+      // 嵌入并发闸：避免多个上传/重嵌入任务同时压满资源，带超时避免永久挂起
+      const release = await embedSemaphore.acquire({ timeoutMs: 120_000, signal: req.signal });
       try {
-        const vecs = await embedTexts(structured.map((s, i) => `${contexts[i]}\n\n${s.text}`));
+        if (req.signal.aborted) throw new Error('请求已取消');
+        const vecs = await embedTexts(structured.map((s, i) => contextualize(parsed.name, s.path, i, total, s.text)));
         const meta = embedInfo();
         const id = insertDocument(
           parsed.name,

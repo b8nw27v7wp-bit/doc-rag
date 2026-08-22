@@ -17,6 +17,8 @@ export const RAG_TOP_K = 6;
 export const RAG_MIN_SCORE = 0.18;
 /** 注入 LLM 的历史消息条数上限 */
 export const HISTORY_LIMIT = 12;
+/** 历史单条截断长度，防止超长上下文撑爆 token */
+export const HISTORY_MAX_CHARS = 2000;
 
 export function buildSystemPrompt(): string {
   return (
@@ -38,13 +40,14 @@ export function buildRagMessages(question: string, hits: SourceHit[], history: C
   const docs = hits
     .map(
       (h, i) =>
-        `[${i + 1}] 出自《${h.docName}》（第 ${h.idx + 1} 段）\n${h.text}`
+        `[${i + 1}] 出自《${h.docName}》（第 ${h.idx + 1} 段）\n${h.text.slice(0, 4000)}`
     )
     .join('\n\n');
 
   const messages: ChatMsg[] = [{ role: 'system', content: buildSystemPrompt() }];
   for (const h of history.slice(-HISTORY_LIMIT)) {
-    messages.push({ role: h.role, content: h.content });
+    const content = h.content.length > HISTORY_MAX_CHARS ? h.content.slice(0, HISTORY_MAX_CHARS) + '…' : h.content;
+    messages.push({ role: h.role, content });
   }
   messages.push({
     role: 'user',

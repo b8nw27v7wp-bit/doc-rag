@@ -25,6 +25,18 @@ export default function UploadDropzone() {
     async (files: FileList | File[]) => {
       const list = Array.from(files);
       if (list.length === 0) return;
+      // 客户端前置校验：文件数与单文件大小
+      const MAX_FILES = 20;
+      const MAX_MB = 50;
+      if (list.length > MAX_FILES) {
+        setResults([{ ok: false, name: '', error: `一次最多 ${MAX_FILES} 个文件，已选 ${list.length} 个` }]);
+        return;
+      }
+      const oversized = list.filter((f) => f.size > MAX_MB * 1024 * 1024);
+      if (oversized.length > 0) {
+        setResults(oversized.map((f) => ({ ok: false, name: f.name, error: `超过 ${MAX_MB}MB 上限` })));
+        return;
+      }
       const form = new FormData();
       for (const f of list) form.append('files', f);
       setBusy(true);

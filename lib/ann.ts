@@ -100,6 +100,68 @@ export function buildAnnIndex(
   return { nlist, dim, centroids, buckets };
 }
 
+/** 异步构建索引：大库时每轮迭代让出事件循环，避免阻塞请求线程 */
+export async function buildAnnIndexAsync(
+  vectors: Float32Array[],
+  opts: { nlist?: number; iterations?: number; seed?: number } = {}
+): Promise<AnnIndex> {
+  // 小库直接同步构建，避免额外开销
+  if (vectors.length < 3000) return buildAnnIndex(vectors, opts);
+  const n = vectors.length;
+  if (n === 0) return { nlist: 0, dim: 0, centroids: [], buckets: [] };
+  const dim = vectors[0].length;
+  const nlist = Math.max(1, Math.min(opts.nlist ?? Math.round(Math.sqrt(n)), n));
+  const iterations = opts.iterations ?? 10;
+  const rand = lcg(opts.seed ?? 42);
+  const centroids: Float32Array[] = [];
+  const used = new Set<number>();
+  while (centroids.length < nlist) {
+    const idx = Math.floor(rand() * n);
+    if (!used.has(idx)) {
+      used.add(idx);
+      centroids.push(vectors[idx].slice());
+    }
+  }
+  const assignAsync = async (): Promise<number[][]> => {
+    const buckets: number[][] = Array.from({ length: nlist }, () => []);
+    for (let i = 0; i < n; i++) {
+      let best = 0;
+      let bestScore = -Infinity;
+      for (let c = 0; c < nlist; c++) {
+        const s = dot(vectors[i], centroids[c]);
+        if (s > bestScore) {
+          bestScore = s;
+          best = c;
+        }
+      }
+      buckets[best].push(i);
+      if (i % 1000 === 0 && i !== 0) {
+        await new Promise<void>((r) => setImmediate(r));
+      }
+    }
+    return buckets;
+  };
+  let buckets: number[][] = [];
+  for (let it = 0; it < iterations; it++) {
+    buckets = await assignAsync();
+    for (let c = 0; c < nlist; c++) {
+      const members = buckets[c];
+      if (members.length === 0) continue;
+      const mean = new Float32Array(dim);
+      for (const i of members) {
+        const v = vectors[i];
+        for (let d = 0; d < dim; d++) mean[d] += v[d];
+      }
+      for (let d = 0; d < dim; d++) mean[d] /= members.length;
+      centroids[c] = normalize(mean);
+    }
+    // 每轮让出一次，避免长时间占用主线程
+    await new Promise<void>((r) => setImmediate(r));
+  }
+  buckets = await assignAsync();
+  return { nlist, dim, centroids, buckets };
+}
+
 /** 探测与 query 最近的前 nprobe 个桶，返回候选向量下标（去重、无序） */
 export function annCandidateIndices(ann: AnnIndex, query: Float32Array, nprobe: number): number[] {
   if (ann.nlist === 0) return [];

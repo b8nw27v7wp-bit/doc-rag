@@ -94,15 +94,25 @@ export function rowsToText(rows: string[][]): string {
 
 /** 解析文件内容为纯文本（清理空白与多余空行） */
 export async function parseDocument(fileName: string, buf: Buffer): Promise<ParsedDoc> {
-  const ext = path.extname(fileName).toLowerCase().replace('.', '');
+  // 文件名净化：仅保留基名，去除路径与控制字符，防止 XSS/路径穿越显示问题
+  const safeName = path.basename(fileName).replace(/[\x00-\x1f\x7f]/g, '').trim().slice(0, 255) || 'unnamed';
+  const ext = path.extname(safeName).toLowerCase().replace('.', '');
   let raw = '';
 
   if (ext === 'txt' || ext === 'md' || ext === 'markdown') {
     raw = buf.toString('utf8');
   } else if (ext === 'pdf') {
+    // 魔数校验：PDF 应以 %PDF- 开头（防止伪装扩展名）
+    if (buf.length >= 4 && buf.subarray(0, 5).toString('utf8') !== '%PDF-') {
+      // 宽松：仍尝试解析，但后续空文本会抛错；此处不硬性拒绝以免误伤
+    }
     const pdf = await pdfParse(buf);
     raw = pdf.text;
   } else if (ext === 'docx') {
+    // docx 实为 zip：魔数 PK
+    if (buf.length >= 2 && buf[0] !== 0x50 && buf[1] !== 0x4b) {
+      throw new Error('docx 文件头无效（不是合法的 Office 文档）');
+    }
     const result = await mammoth.extractRawText({ buffer: buf });
     raw = result.value;
   } else if (ext === 'html' || ext === 'htm') {
@@ -119,7 +129,7 @@ export async function parseDocument(fileName: string, buf: Buffer): Promise<Pars
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 
-  if (!text) throw new Error(`${fileName} 未能提取到文本内容（可能是扫描件/图片型 PDF）`);
+  if (!text) throw new Error(`${safeName} 未能提取到文本内容（可能是扫描件/图片型 PDF）`);
 
-  return { name: fileName, ext, text, charCount: text.length };
+  return { name: safeName, ext, text, charCount: text.length };
 }

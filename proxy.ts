@@ -5,8 +5,8 @@ import { AUTH_COOKIE, authEnabled, isAuthorized } from './lib/auth';
 export function proxy(req: NextRequest) {
   if (!authEnabled()) return NextResponse.next();
   const { pathname } = req.nextUrl;
-  // 登录页、登录接口与静态资源放行
-  if (pathname.startsWith('/_next') || pathname === '/lock' || pathname === '/api/lock') {
+  // 登录页、登录接口、健康检查与静态资源放行（健康检查需供容器探活匿名访问）
+  if (pathname.startsWith('/_next') || pathname === '/lock' || pathname === '/api/lock' || pathname === '/api/health' || pathname === '/api/openapi') {
     return NextResponse.next();
   }
   if (isAuthorized(req.cookies.get(AUTH_COOKIE)?.value)) return NextResponse.next();

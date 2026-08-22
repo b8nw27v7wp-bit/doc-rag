@@ -16,7 +16,9 @@ function sanitizeFilename(name: string): string {
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
-  const id = Number(searchParams.get('id'));
+  const rawId = searchParams.get('id');
+  const id = rawId ? Number(rawId) : 0;
+  if (rawId && (!Number.isInteger(id) || id <= 0)) return Response.json({ error: 'id 参数无效' }, { status: 400 });
 
   let content: string;
   let filename: string;

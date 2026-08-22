@@ -26,14 +26,20 @@ export function buildQueryExpansionPrompt(question: string): ChatMsg[] {
   ];
 }
 
-/** 解析改写结果：支持「1. xxx」「- xxx」等行；解析失败时回退为按行拆分 */
+/** 解析改写结果：支持「1. xxx」「- xxx」等行；兼容混合格式（部分编号、部分裸行） */
 export function parseQueryLines(text: string): string[] {
-  const numbered: string[] = [];
+  const out: string[] = [];
   const lines = text.split('\n');
   for (const line of lines) {
     const m = /^\s*(?:\d+\s*[.)、]\s*|[-*]\s+)(.+?)\s*$/.exec(line);
-    if (m) numbered.push(m[1]);
+    if (m) {
+      const v = m[1].trim();
+      if (v) out.push(v);
+    } else {
+      const t = line.trim();
+      if (t && !t.startsWith('#')) out.push(t);
+    }
   }
-  const fallback = numbered.length === 0 ? lines.map((l) => l.trim()).filter((l) => l && !l.startsWith('#')) : numbered;
-  return [...new Set(fallback)].filter(Boolean);
+  // 去重保序
+  return [...new Set(out)].filter(Boolean);
 }

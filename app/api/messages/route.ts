@@ -1,12 +1,13 @@
 /** 会话消息查询：恢复对话与引用重放 */
 import { NextRequest } from 'next/server';
 import { listMessages, getSession } from '@/lib/db';
+import { parsePositiveInt } from '@/lib/validate';
 
 export const runtime = 'nodejs';
 
 export async function GET(req: NextRequest) {
-  const sessionId = Number(new URL(req.url).searchParams.get('session'));
-  if (!sessionId) return Response.json({ error: '缺少 session 参数' }, { status: 400 });
+  const sessionId = parsePositiveInt(Number(new URL(req.url).searchParams.get('session')), 1_000_000_000);
+  if (sessionId === null) return Response.json({ error: '缺少 session 参数' }, { status: 400 });
   const session = getSession(sessionId);
   if (!session) return Response.json({ error: '会话不存在' }, { status: 404 });
   const messages = listMessages(sessionId).map((m) => ({

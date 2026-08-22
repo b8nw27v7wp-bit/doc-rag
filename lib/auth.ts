@@ -28,3 +28,13 @@ export function isAuthorized(cookieValue: string | undefined): boolean {
   if (a.length !== b.length) return false;
   return timingSafeEqual(a, b);
 }
+
+/** 校验登录密码（恒定时间比较，避免时序侧信道） */
+export function verifyPassword(input: string | undefined): boolean {
+  const expected = process.env.APP_PASSWORD;
+  if (!expected) return true;
+  if (!input) return false;
+  const a = createHash('sha256').update(input).digest();
+  const b = createHash('sha256').update(expected).digest();
+  return timingSafeEqual(a, b);
+}

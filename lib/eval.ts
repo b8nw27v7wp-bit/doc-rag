@@ -4,6 +4,7 @@
  */
 
 export function recallAtK(predicted: number[], relevant: number[], k: number): number {
+  // 约定：无相关项时召回为 1（vacuous truth），与 precision 对称区分
   if (relevant.length === 0) return 1;
   const set = new Set(predicted.slice(0, k));
   let hit = 0;

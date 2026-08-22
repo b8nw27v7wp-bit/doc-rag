@@ -10,7 +10,7 @@ const spec = {
   openapi: '3.1.0',
   info: {
     title: 'DocRAG API',
-    version: '0.8.0',
+    version: '0.8.1',
     description:
       '本地优先的 RAG 文档问答 API：上传文档、混合检索问答、会话管理、全文搜索与导出。',
   },

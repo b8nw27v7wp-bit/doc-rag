@@ -17,7 +17,7 @@ jobs:
       - name: Install
         run: npm ci
       - name: Audit (critical only; 已知传递依赖 high 暂无修复)
-        run: npm audit --audit-level=critical || true
+        run: npm audit --audit-level=critical
       - name: Lint
         run: npm run lint
       - name: Tests

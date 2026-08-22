@@ -57,9 +57,10 @@ export function hybridSearch(params: HybridParams): FusionHit[] {
     if (probed && !probed.has(i)) continue;
     const v = params.embeddings[i];
     if (!v) continue;
+    // 维度不一致视为旧模型块，跳过向量侧（仅关键词召回）
+    if (v.length !== params.queryEmbedding.length) continue;
     let s = 0;
-    const n = Math.min(v.length, params.queryEmbedding.length);
-    for (let d = 0; d < n; d++) s += v[d] * params.queryEmbedding[d];
+    for (let d = 0; d < v.length; d++) s += v[d] * params.queryEmbedding[d];
     if (s >= vectorMin) vecHits.push({ index: i, score: s });
   }
   vecHits.sort((a, b) => b.score - a.score);
