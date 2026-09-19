@@ -10,7 +10,7 @@ const spec = {
   openapi: '3.1.0',
   info: {
     title: 'DocRAG API',
-    version: '0.8.1',
+    version: '0.9.0',
     description:
       '本地优先的 RAG 文档问答 API：上传文档、混合检索问答、会话管理、全文搜索与导出。',
   },
@@ -60,12 +60,22 @@ const spec = {
     },
     '/api/documents/reembed': {
       post: {
-        summary: '重新嵌入文档（换模型后重建向量）',
+        summary: '重新嵌入文档（单篇 / 批量，换模型后重建向量）',
         requestBody: {
           required: true,
-          content: { 'application/json': { schema: { type: 'object', properties: { id: { type: 'integer' } }, required: ['id'] } } },
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  id: { type: 'integer', description: '单篇重嵌' },
+                  ids: { type: 'array', items: { type: 'integer' }, description: '批量重嵌（最多 200）' },
+                },
+              },
+            },
+          },
         },
-        responses: { '200': { description: '重建前后块数' } },
+        responses: { '200': { description: '重建前后块数 / 批量汇总' } },
       },
     },
     '/api/backup': {
@@ -78,18 +88,19 @@ const spec = {
     },
     '/api/search': {
       get: {
-        summary: '全文搜索',
+        summary: '全文搜索（默认 BM25，零命中回退 LIKE）',
         parameters: [
           { name: 'q', in: 'query', required: true, schema: { type: 'string' } },
           { name: 'limit', in: 'query', schema: { type: 'integer', default: 20 } },
+          { name: 'mode', in: 'query', schema: { type: 'string', enum: ['bm25', 'like'], default: 'bm25' } },
         ],
-        responses: { '200': { description: '命中块数组（docId/docName/idx/snippet）' } },
+        responses: { '200': { description: '命中块数组（docId/docName/idx/snippet/score）' } },
       },
     },
     '/api/chat': {
       post: {
         summary: 'RAG 流式问答（NDJSON）',
-        description: '体含 message（必填）、sessionId（可选）、docIds（可选，限定检索范围）、expand（可选，多查询检索）。响应为 NDJSON 事件流。',
+        description: '体含 message（必填）、sessionId/docIds/expand/temperature/maxTokens/topK/minScore（可选）。响应为 NDJSON 事件流。',
         requestBody: {
           required: true,
           content: {
@@ -101,6 +112,10 @@ const spec = {
                   sessionId: { type: 'integer' },
                   docIds: { type: 'array', items: { type: 'integer' } },
                   expand: { type: 'boolean', description: '是否启用查询改写+多查询检索' },
+                  temperature: { type: 'number', minimum: 0, maximum: 2 },
+                  maxTokens: { type: 'integer', minimum: 1, maximum: 100000 },
+                  topK: { type: 'integer', minimum: 1, maximum: 12 },
+                  minScore: { type: 'number', minimum: 0, maximum: 0.9 },
                 },
                 required: ['message'],
               },

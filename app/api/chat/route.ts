@@ -64,6 +64,10 @@ interface ChatBody {
   temperature?: number;
   /** 最大生成 token 数（可选） */
   maxTokens?: number;
+  /** 检索返回块数（可选，1~12，默认 RAG_TOP_K） */
+  topK?: number;
+  /** 向量相似度下限（可选，0~0.9，默认 RAG_MIN_SCORE） */
+  minScore?: number;
 }
 
 export async function POST(req: NextRequest) {
@@ -98,6 +102,19 @@ export async function POST(req: NextRequest) {
   }
   if (body.expand !== undefined && typeof body.expand !== 'boolean') {
     return Response.json({ error: 'expand 必须为布尔值' }, { status: 400 });
+  }
+  let topK = RAG_TOP_K;
+  if (body.topK !== undefined) {
+    const v = parsePositiveInt(body.topK, 12);
+    if (v === null) return Response.json({ error: 'topK 参数无效（1~12）' }, { status: 400 });
+    topK = v;
+  }
+  let minScore = RAG_MIN_SCORE;
+  if (body.minScore !== undefined) {
+    if (typeof body.minScore !== 'number' || !Number.isFinite(body.minScore) || body.minScore < 0 || body.minScore > 0.9) {
+      return Response.json({ error: 'minScore 参数无效（0~0.9）' }, { status: 400 });
+    }
+    minScore = body.minScore;
   }
 
   // 会话解析：无 id 自动新建；有 id 需存在
@@ -221,8 +238,8 @@ export async function POST(req: NextRequest) {
             texts,
             queryEmbedding: qvec,
             query: effectiveQueries[qi],
-            k: RAG_TOP_K * 3,
-            vectorMin: RAG_MIN_SCORE,
+            k: topK * 3,
+            vectorMin: minScore,
             bm25,
             ann,
             annProbe: nprobe,
@@ -231,7 +248,7 @@ export async function POST(req: NextRequest) {
         }
 
         // 合并各查询结果（全局 RRF）
-        const fused = mergeMultiSearch(fusedByQuery, RAG_TOP_K * 3);
+        const fused = mergeMultiSearch(fusedByQuery, topK * 3);
         if (fused.length === 0) {
           send({ type: 'error', message: '没有检索到与问题相关的资料，换个问法或补充文档试试' });
           return;
@@ -246,10 +263,10 @@ export async function POST(req: NextRequest) {
             vector: dimMask[h.index] ? candidates[h.index].embedding : null,
             docId: candidates[h.index].docId,
           })),
-          k: RAG_TOP_K,
+          k: topK,
           lambda: MMR_LAMBDA,
         });
-        const selected = top.length > 0 ? top : fused.slice(0, RAG_TOP_K).map((h) => h);
+        const selected = top.length > 0 ? top : fused.slice(0, topK).map((h) => h);
 
         // 邻块上下文扩展：命中块并入同文档相邻块，答案更完整
         const centers = selected.map((it) => candidates[it.index]);

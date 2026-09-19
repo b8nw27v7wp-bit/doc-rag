@@ -19,6 +19,31 @@ export const RAG_MIN_SCORE = 0.18;
 export const HISTORY_LIMIT = 12;
 /** 历史单条截断长度，防止超长上下文撑爆 token */
 export const HISTORY_MAX_CHARS = 2000;
+/** 历史总预算（字符），超预算时优先保留最新消息，丢弃最早的 */
+export const HISTORY_BUDGET_CHARS = 8000;
+
+/** 历史压缩：单条截断 + 总预算控制（新消息优先），防小模型上下文溢出 */
+export function compactHistory(history: ChatMsg[]): ChatMsg[] {
+  const truncated = history.slice(-HISTORY_LIMIT).map((h) => ({
+    role: h.role,
+    content: h.content.length > HISTORY_MAX_CHARS ? h.content.slice(0, HISTORY_MAX_CHARS) + '…' : h.content,
+  }));
+  let budget = HISTORY_BUDGET_CHARS;
+  const out: ChatMsg[] = [];
+  for (let i = truncated.length - 1; i >= 0; i--) {
+    const m = truncated[i];
+    if (m.content.length <= budget) {
+      out.unshift(m);
+      budget -= m.content.length;
+    } else if (out.length === 0) {
+      out.unshift({ role: m.role, content: m.content.slice(0, Math.max(0, budget)) + '…' });
+      break;
+    } else {
+      break;
+    }
+  }
+  return out;
+}
 
 export function buildSystemPrompt(): string {
   return (
@@ -45,9 +70,8 @@ export function buildRagMessages(question: string, hits: SourceHit[], history: C
     .join('\n\n');
 
   const messages: ChatMsg[] = [{ role: 'system', content: buildSystemPrompt() }];
-  for (const h of history.slice(-HISTORY_LIMIT)) {
-    const content = h.content.length > HISTORY_MAX_CHARS ? h.content.slice(0, HISTORY_MAX_CHARS) + '…' : h.content;
-    messages.push({ role: h.role, content });
+  for (const h of compactHistory(history)) {
+    messages.push({ role: h.role, content: h.content });
   }
   messages.push({
     role: 'user',

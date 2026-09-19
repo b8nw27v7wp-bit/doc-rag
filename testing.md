@@ -8,7 +8,7 @@ DocRAG 的测试分层：单元测试（`npm test`）+ 专项验证脚本（`scr
 npm test
 ```
 
-运行 `node --test`（168 项，含路由层集成测试），覆盖：
+运行 `node --test`（175 项，含路由层集成测试），覆盖：
 
 | 文件 | 覆盖点 |
 |---|---|
@@ -39,6 +39,7 @@ npm test
 | `tests/rag.test.ts` | 引用编号提取、prompt 组装、**多轮历史注入与截断**、system prompt 规则 |
 | `tests/db.test.ts` | 会话 CRUD、docIds 范围存取、置顶排序、消息追加/级联删除、自动标题生成、**内容哈希去重、批量删除、原文重组、全文搜索与 LIKE 转义、迁移、上下文头/关键词/摘要/嵌入元信息存取、重建块、备份一致性快照与整体恢复、恢复校验、内存缓存失效**（隔离临时数据目录） |
 | `tests/bm25.test.ts` | tokenizer、BM25 排序与 tf 权重、专有名词、RRF 融合、k 截断、全不相关、**预建索引复用一致性、null 向量混合检索** |
+| `tests/p1.test.ts` | 超长文档拒绝、分批常量/模型加载态、历史预算压缩、搜索 bm25/like/mode 校验、chat topK/minScore 校验、批量重嵌汇总、健康匿名脱敏 |
 
 ## 专项验收脚本
 

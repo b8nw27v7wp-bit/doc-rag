@@ -25,10 +25,11 @@
 - 流式回答（NDJSON over fetch stream，带超时保护），回答标注 [n] 引用，点击查看原文出处段落
 - **多轮对话会话**：上下文随问答自动保存（SQLite），可随时回来继续；会话标题从首问自动生成（≤24 字）；**支持重命名、置顶、搜索与 Markdown 导出**
 - **按文档筛选检索范围**：每个会话可限定仅在指定文档内问答，多主题资料互不干扰
-- **文档库管理**：全文搜索（命中段落高亮切片）、批量删除、查看原文、**自动标签 + LLM 摘要 + 一键重新嵌入**
-- **数据安全**：`GET/POST /api/backup` 一致性备份与安全恢复；嵌入模型信息随文档落库，换模型后旧块自动降级仅关键词召回并预警
-- **CLI 批量导入**：`npm run import -- 目录/` 递归扫描本地文档入库，不经 HTTP，自动跳过重复文档
-- **REST API + 健康检查 + OpenAPI 文档**：`/api/openapi` 机器可读，`/api/health` 供探活/容器健康检查
+- **文档库管理**：BM25 全文搜索默认（零命中回退 LIKE，`?mode=like` 可切回）、分页/排序/按格式与文件名筛选、批量删除、查看原文、**自动标签 + LLM 摘要 + 单篇/一键全库重新嵌入**
+- **问答可调参**：模型设置页可调检索块数 topK（1~12）、最小相似度（0~0.9）、最大生成 token 与温度（0~2），随请求透传
+- **数据安全**：`GET/POST /api/backup` 一致性备份与安全恢复；`npm run backup` 定时快照轮转；嵌入模型信息随文档落库，换模型后旧块自动降级仅关键词召回并预警
+- **CLI 批量导入/导出**：`npm run import -- 目录/` 递归扫描入库（自动跳过重复）；`npm run export -- --id 3` 导出会话 Markdown，不经 HTTP
+- **REST API + 健康检查 + OpenAPI 文档**：`/api/openapi` 机器可读，`/api/health` 供探活/容器健康检查（设密码时匿名只回存活，登录后全量；上报嵌入模型加载状态）
 - 模型预设：DeepSeek / GLM / Kimi / Ollama / 自定义 OpenAI 兼容端点
 - 可选访问密码（`APP_PASSWORD` 环境变量，适合部署到局域网）
 - **Docker 一键部署**（多阶段构建 + 数据卷持久化 + 构建期预下载嵌入模型 + 健康检查）
@@ -50,7 +51,7 @@ npm run dev                  # http://localhost:3000
 验证安装：
 
 ```bash
-npm test                     # 168 项单元测试（含路由层集成测试）
+npm test                     # 175 项单元测试（含路由层集成测试）
 npm run build && npm start   # 生产构建
 node scripts/verify-embed.mjs        # 验证本地嵌入模型
 node scripts/verify-api.mjs          # 端到端验收（需服务已启动）
@@ -64,6 +65,8 @@ npx tsx scripts/eval-retrieval.ts    # 检索质量离线评估（Recall/Precisi
 ```bash
 npm run import -- ./docs/ 论文.pdf 随手记.md    # 目录 + 文件混用，递归扫描
 DATA_DIR=/path/to/data npm run import -- ./docs/   # 指定数据目录
+npm run backup -- ./backups --keep 7               # 一致性快照 + 轮转保留
+npm run export -- --id 3 --out 会话.md             # 导出单个/全部会话为 Markdown
 ```
 
 ### Docker 部署
@@ -117,10 +120,13 @@ docker compose up -d --build
 | `EMBED_MODEL` | `Xenova/paraphrase-multilingual-MiniLM-L12-v2` | 可换其他 transformers.js 兼容模型 |
 | `EMBED_DTYPE` | `q8` | 量化精度 |
 | `EMBED_CONCURRENCY` | `2` | 嵌入并发上限（上传/重嵌入共享） |
+| `EMBED_BATCH_SIZE` | `32` | 单次送模型的文本条数（大文档分批防 OOM） |
+| `MAX_DOC_CHARS` | `300000` | 单文档字符上限（超限拒绝并提示拆分） |
 | `ANN_MIN_CHUNKS` | `2000` | 块数达到该值启用 IVF 近似向量检索；`0` 禁用 |
 | `DATA_DIR` | `./data` | SQLite 数据目录 |
 | `MAX_UPLOAD_MB` | `50` | 单文件上传大小上限 |
 | `MAX_FILES` | `20` | 单次上传文件数上限 |
+| `MAX_TOTAL_MB` | `200` | 单次上传总量上限（默认 min(MAX_FILES*MAX_UPLOAD_MB,200)） |
 | `APP_PASSWORD` | - | 设置后启用访问密码门 |
 
 ## 隐私与安全
@@ -146,9 +152,9 @@ app/
   api/documents/      # 文档列表 / 单个或批量删除
   api/documents/content/  # 文档原文内容
   api/documents/summarize/  # 文档摘要（可选 LLM）
-  api/documents/reembed/   # 文档重新嵌入（换模型后重建向量）
-  api/search/         # 全文搜索
-  api/chat/           # RAG 流式问答（多轮历史 + 自动存档, NDJSON）
+  api/documents/reembed/   # 文档重新嵌入（单篇 / ids 批量，换模型后重建向量）
+  api/search/         # 全文搜索（默认 BM25，零命中回退 LIKE）
+  api/chat/           # RAG 流式问答（多轮历史压缩 + 自动存档, NDJSON，可调 topK/minScore）
   api/sessions/       # 会话管理（列表/新建/重命名/置顶/删除）
   api/sessions/export/   # 会话导出 Markdown
   api/messages/       # 会话消息恢复（含引用重放）
@@ -158,10 +164,10 @@ app/
   api/openapi/        # OpenAPI 3.1 文档
 components/
   session-sidebar.tsx # 会话列表 + 置顶/搜索/重命名 + 文档范围筛选
-  doc-browser.tsx     # 文档浏览器（搜索/批量删除/标签/摘要/原文查看）
+  doc-browser.tsx     # 文档浏览器（BM25 搜索/分页排序筛选/批量删除/标签/摘要/原文查看/全库重嵌）
   upload.tsx          # 拖拽上传（去重/跳过展示）
   message-bubble.tsx  # 消息气泡（引用芯片/思考过程/越界引用提示）
-  model-settings.tsx  # 模型设置弹窗（温度/查询增强/BYOK）
+  model-settings.tsx  # 模型设置弹窗（温度/topK/相似度/maxTokens/查询增强/BYOK）
   locale.tsx          # 基础 i18n（中/英）+ 本地化 Provider
   nav.tsx             # 顶部导航（含深色模式/语言切换）
 proxy.ts              # 可选密码门（Next 16 proxy 约定）
@@ -192,10 +198,12 @@ lib/
   export.ts           # 会话 Markdown 导出
   db.ts               # node:sqlite 惰性初始化（WAL + 迁移 + 备份/恢复 + 检索缓存）
   llm.ts              # OpenAI 兼容流式/非流式调用（超时/温度/推理内容）
-  rag.ts              # prompt 组装（历史注入）+ 引用提取
-tests/                # node --test（168 项，含路由层集成测试）
+  rag.ts              # prompt 组装（历史压缩注入）+ 引用提取
+tests/                # node --test（175 项，含路由层集成测试）
 scripts/
   import-cli.ts       # CLI 批量导入（目录递归 + 去重）
+  backup-cli.ts       # CLI 快照备份 + 轮转保留
+  export-cli.ts       # CLI 会话导出 Markdown
   verify-embed.mjs    # 嵌入模型验证
   verify-api.mjs      # 端到端验收（上传→检索→会话全流程）
   eval-retrieval.ts   # 检索质量离线评估（Recall/Precision/MRR）
@@ -217,6 +225,7 @@ docker-compose.yml    # 一键部署 + 数据卷 + 健康检查
 - [x] BM25 倒排加速 + IVF 近似检索（大库）
 - [x] LLM 参数化与推理模型支持（temperature/max_tokens/reasoning）
 - [x] 引用可信度自检、输入校验、CI、路由集成测试、深色模式、基础 i18n
+- [x] 文档库 BM25 搜索 + 分页排序筛选 + 问答 topK/相似度可调 + 历史预算压缩 + 全库重嵌 + 快照轮转 CLI + 健康脱敏
 - [ ] 扫描件 PDF 的 OCR 支持
 - [ ] 重排序模型（cross-encoder）接入
 - [ ] PDF 导出分享

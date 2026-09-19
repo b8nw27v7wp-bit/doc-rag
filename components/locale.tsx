@@ -81,6 +81,14 @@ const EN: Record<string, string> = {
   思考过程: 'Reasoning',
   '模型可能引用了超出资料范围的编号（已隐藏）': 'Some citations were out of range and hidden',
   '确定要恢复备份吗？当前数据将被覆盖': 'Restore will overwrite current data. Continue?',
+  '按文件名过滤…': 'Filter by name…',
+  全部格式: 'All formats',
+  最新在前: 'Newest first',
+  按名称: 'By name',
+  按大小: 'By size',
+  按块数: 'By chunks',
+  上一页: 'Prev',
+  下一页: 'Next',
 };
 
 interface LocaleCtx {

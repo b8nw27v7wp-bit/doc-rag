@@ -8,6 +8,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync, statSync, writeFileSync, readFileSync, rmSync, copyFileSync, existsSync, renameSync, fsyncSync, openSync, closeSync } from 'node:fs';
 import path from 'node:path';
 import { bytesToF32 } from './vector';
+import { BM25Index } from './bm25';
 
 const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), 'data');
 
@@ -23,8 +24,41 @@ function ensureDataDir(): void {
 // 检索语料内存缓存：避免每次提问都重读 SQLite 并把嵌入 BLOB 反序列化为 Float32Array。
 // 文档增删时置空，下次访问重建。
 let chunkCache: ChunkRecord[] | null = null;
+/** 轻量文本缓存（文档库 BM25 搜索用，不含向量，避免 BLOB 反序列化开销） */
+interface ChunkTextRow {
+  docId: number;
+  docName: string;
+  idx: number;
+  text: string;
+}
+let chunkTextCache: ChunkTextRow[] | null = null;
 function invalidateChunks(): void {
   chunkCache = null;
+  chunkTextCache = null;
+}
+
+/** 全量分块文本（不含向量，文档库搜索用，走独立缓存） */
+export function allChunkTexts(): ChunkTextRow[] {
+  if (chunkTextCache) return chunkTextCache;
+  const rows = getDb()
+    .prepare(
+      `SELECT c.doc_id, d.name AS doc_name, c.idx, c.text
+       FROM chunks c JOIN documents d ON d.id = c.doc_id
+       ORDER BY d.id DESC, c.idx ASC`
+    )
+    .all() as unknown as {
+    doc_id: number;
+    doc_name: string;
+    idx: number;
+    text: string;
+  }[];
+  chunkTextCache = rows.map((r) => ({
+    docId: r.doc_id,
+    docName: r.doc_name,
+    idx: r.idx,
+    text: r.text,
+  }));
+  return chunkTextCache;
 }
 
 function getDb(): DatabaseSync {
@@ -427,6 +461,30 @@ export interface SearchHit {
 /** 转义 LIKE 特殊字符 */
 function escapeLike(q: string): string {
   return q.replace(/[\\%_]/g, (c) => `\\${c}`);
+}
+
+/**
+ * BM25 关键词检索（文档库搜索默认）：中文 bigram + 英文词，比 LIKE 更懂同义/分词。
+ * 无向量参与，不触发嵌入模型加载；空查询/零命中时由调用方回退 LIKE。
+ */
+export function searchChunksBM25(query: string, limit = 20): (SearchHit & { score: number })[] {
+  const q = query.trim();
+  if (!q) return [];
+  const corpus = allChunkTexts();
+  if (corpus.length === 0) return [];
+  const index = new BM25Index(corpus.map((c, i) => ({ index: i, text: c.text })));
+  const hits = index.search(q, limit);
+  return hits.map((h) => {
+    const c = corpus[h.index];
+    return {
+      docId: c.docId,
+      docName: c.docName,
+      idx: c.idx,
+      text: c.text,
+      snippet: makeSnippet(c.text, q),
+      score: Math.round(h.score * 100) / 100,
+    };
+  });
 }
 
 /**

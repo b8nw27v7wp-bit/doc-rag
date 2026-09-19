@@ -13,6 +13,9 @@ const DEFAULT_SETTINGS: Settings = {
   apiKey: '',
   expand: false,
   temperature: 0.3,
+  topK: 6,
+  minScore: 0.18,
+  maxTokens: null,
 };
 const LS_KEY = 'docrag.settings';
 
@@ -21,7 +24,13 @@ function loadSettings(): Settings {
   try {
     const raw = localStorage.getItem(LS_KEY);
     if (!raw) return DEFAULT_SETTINGS;
-    return { ...DEFAULT_SETTINGS, ...(JSON.parse(raw) as Partial<Settings>) };
+    const merged = { ...DEFAULT_SETTINGS, ...(JSON.parse(raw) as Partial<Settings>) };
+    // 旧缓存兼容：钳位新增字段，防手动篡改越界
+    if (!Number.isInteger(merged.topK) || merged.topK < 1 || merged.topK > 12) merged.topK = 6;
+    if (typeof merged.minScore !== 'number' || merged.minScore < 0 || merged.minScore > 0.9) merged.minScore = 0.18;
+    if (typeof merged.temperature !== 'number' || merged.temperature < 0 || merged.temperature > 2) merged.temperature = 0.3;
+    if (merged.maxTokens !== null && (!Number.isInteger(merged.maxTokens) || merged.maxTokens <= 0)) merged.maxTokens = null;
+    return merged;
   } catch {
     return DEFAULT_SETTINGS;
   }
@@ -196,6 +205,9 @@ export default function ChatPage() {
         ...(scopeIds.length > 0 ? { docIds: scopeIds } : {}),
         ...(settings.expand ? { expand: true } : {}),
         temperature: settings.temperature,
+        topK: settings.topK,
+        minScore: settings.minScore,
+        ...(settings.maxTokens ? { maxTokens: settings.maxTokens } : {}),
       };
       const res = await fetch('/api/chat', {
         method: 'POST',

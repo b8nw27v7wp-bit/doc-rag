@@ -35,6 +35,14 @@ interface Extractor {
 let pipePromise: Promise<Extractor> | null = null;
 let resolvedDim: number | null = null;
 
+/** 模型是否已加载（健康检查/预热状态用，无副作用） */
+export function isEmbedLoaded(): boolean {
+  return resolvedDim !== null;
+}
+
+/** 单次送模型的文本条数上限（防大文档 OOM），可用 EMBED_BATCH_SIZE 覆盖 */
+export const EMBED_BATCH_SIZE = Math.max(1, Number(process.env.EMBED_BATCH_SIZE) || 32);
+
 function getExtractor(): Promise<Extractor> {
   if (!pipePromise) {
     pipePromise = (pipeline('feature-extraction', EMBED_MODEL, { dtype: EMBED_DTYPE }) as unknown as Promise<Extractor>).catch(
@@ -101,17 +109,22 @@ export async function embedTexts(texts: string[]): Promise<Float32Array[]> {
     }
   }
   if (flat.length === 0) return [];
-  const out = await extractor(flat, { pooling: 'mean', normalize: true });
-  const dims = out.dims as number[]; // [n, dim]
-  const n = dims[0];
-  const d = dims.length > 1 ? dims[1] : EMBED_DIM;
-  resolvedDim = d;
-  const data = out.data as Float32Array;
+  // 分批送模型：大文档（千块 × 多滑窗）一次全量会撑爆内存/显存
   const windowVecs: Float32Array[] = [];
-  for (let i = 0; i < n; i++) {
-    const row = new Float32Array(d);
-    row.set(data.subarray(i * d, (i + 1) * d));
-    windowVecs.push(row);
+  let d = EMBED_DIM;
+  for (let b = 0; b < flat.length; b += EMBED_BATCH_SIZE) {
+    const batch = flat.slice(b, b + EMBED_BATCH_SIZE);
+    const out = await extractor(batch, { pooling: 'mean', normalize: true });
+    const dims = out.dims as number[]; // [n, dim]
+    const n = dims[0];
+    d = dims.length > 1 ? dims[1] : EMBED_DIM;
+    resolvedDim = d;
+    const data = out.data as Float32Array;
+    for (let i = 0; i < n; i++) {
+      const row = new Float32Array(d);
+      row.set(data.subarray(i * d, (i + 1) * d));
+      windowVecs.push(row);
+    }
   }
   // 单窗直接返回，多窗均值池化并重新归一化
   const result: Float32Array[] = [];

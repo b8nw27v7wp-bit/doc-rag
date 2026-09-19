@@ -10,6 +10,9 @@ export interface Settings {
   apiKey: string;
   expand: boolean;
   temperature: number;
+  topK: number;
+  minScore: number;
+  maxTokens: number | null;
 }
 
 export const PRESETS: Record<string, { baseURL: string; model: string; label: string }> = {
@@ -107,11 +110,51 @@ export default function ModelSettings({ settings, onSave, onClose }: Props) {
             <input
               type="range"
               min={0}
-              max={1.5}
+              max={2}
               step={0.1}
               value={draft.temperature}
               onChange={(e) => setDraft((s) => ({ ...s, temperature: Number(e.target.value) }))}
               className="accent-[#1d1d1f]"
+            />
+          </label>
+
+          <label className="flex flex-col gap-1.5 text-[12px] font-medium">
+            检索块数 topK · {draft.topK}
+            <input
+              type="range"
+              min={1}
+              max={12}
+              step={1}
+              value={draft.topK}
+              onChange={(e) => setDraft((s) => ({ ...s, topK: Number(e.target.value) }))}
+              className="accent-[#1d1d1f]"
+            />
+          </label>
+
+          <label className="flex flex-col gap-1.5 text-[12px] font-medium">
+            最小相似度 · {draft.minScore.toFixed(2)}
+            <input
+              type="range"
+              min={0}
+              max={0.9}
+              step={0.05}
+              value={draft.minScore}
+              onChange={(e) => setDraft((s) => ({ ...s, minScore: Number(e.target.value) }))}
+              className="accent-[#1d1d1f]"
+            />
+          </label>
+
+          <label className="flex flex-col gap-1.5 text-[12px] font-medium">
+            最大生成 token（留空用服务商默认）
+            <input
+              value={draft.maxTokens ?? ''}
+              onChange={(e) => {
+                const v = e.target.value.trim();
+                setDraft((s) => ({ ...s, maxTokens: v === '' ? null : Math.max(1, Math.min(100000, Number(v) || 0)) || null }));
+              }}
+              placeholder="如 2048"
+              inputMode="numeric"
+              className="h-9 rounded-lg bg-[#f5f5f7] px-3 text-[13px] outline-none"
             />
           </label>
 

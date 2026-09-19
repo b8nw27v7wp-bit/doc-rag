@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.9.0] - 2026-09-19
+
+### Added
+
+- 文档库搜索升级：默认 BM25（中文 bigram，不触发嵌入模型），零命中回退 LIKE，`GET /api/search?mode=bm25|like`
+- 文档库分页/排序/筛选：客户端 20 条分页 + 按名称/大小/块数排序 + 按格式与文件名过滤，全选改为本页
+- 问答可调参：`POST /api/chat` 新增 `topK（1~12）/minScore（0~0.9）`，设置面板新增 topK/相似度/maxTokens，温度统一 0~2
+- 全库重嵌：`POST /api/documents/reembed { ids: number[] }` 批量逐篇重建并汇总，文档库新增「全部重嵌」按钮
+- 历史预算压缩：`compactHistory` 单条 2000 字 + 总量 8000 字双预算，新消息优先，小模型不爆上下文
+- 健康增强与脱敏：`GET /api/health` 上报嵌入模型加载状态；设密码时匿名只回存活，登录后全量
+- CLI 补齐：`npm run backup` 快照轮转保留，`npm run export` 会话导出 Markdown
+- 嵌入健壮性：`EMBED_BATCH_SIZE` 分批送模型防 OOM，`MAX_DOC_CHARS` 单文档上限并提示拆分
+- 单测新增 7 项，共 175 项全绿
+
 ## [0.8.0] - 2026-08-19
 
 ### Added

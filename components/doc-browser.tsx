@@ -45,8 +45,41 @@ export default function DocBrowser({ docs }: { docs: DocItem[] }) {
   const [searching, setSearching] = useState(false);
   const [summarizingId, setSummarizingId] = useState<number | null>(null);
   const [summaryError, setSummaryError] = useState('');
+  const [reembedBusy, setReembedBusy] = useState(false);
+  const [reembedMsg, setReembedMsg] = useState('');
+  // 文档库分页/排序/筛选（客户端，避免百份文档一次全渲染）
+  const [page, setPage] = useState(1);
+  const [sortKey, setSortKey] = useState<'createdAt' | 'name' | 'size' | 'chunks'>('createdAt');
+  const [extFilter, setExtFilter] = useState<string>('all');
+  const [nameFilter, setNameFilter] = useState('');
+  const PAGE_SIZE = 20;
 
-  const allSelected = docs.length > 0 && selected.size === docs.length;
+  const exts = useMemo(() => [...new Set(docs.map((d) => d.ext))].sort(), [docs]);
+  const filtered = useMemo(() => {
+    const kw = nameFilter.trim().toLowerCase();
+    let list = docs.filter(
+      (d) =>
+        (extFilter === 'all' || d.ext === extFilter) &&
+        (!kw || d.name.toLowerCase().includes(kw))
+    );
+    list = [...list].sort((a, b) => {
+      if (sortKey === 'name') return a.name.localeCompare(b.name, 'zh-CN');
+      if (sortKey === 'size') return b.size - a.size;
+      if (sortKey === 'chunks') return b.chunkCount - a.chunkCount;
+      return b.id - a.id;
+    });
+    return list;
+  }, [docs, extFilter, nameFilter, sortKey]);
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const safePage = Math.min(page, totalPages);
+  const pageDocs = useMemo(
+    () => filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE),
+    [filtered, safePage]
+  );
+  // 翻页/筛选变化时回到合法页码
+  const gotoPage = (p: number) => setPage(Math.max(1, Math.min(p, totalPages)));
+
+  const allSelected = pageDocs.length > 0 && pageDocs.every((d) => selected.has(d.id));
 
   const toggle = (id: number) => {
     setSelected((prev) => {
@@ -58,7 +91,15 @@ export default function DocBrowser({ docs }: { docs: DocItem[] }) {
   };
 
   const toggleAll = () => {
-    setSelected(allSelected ? new Set() : new Set(docs.map((d) => d.id)));
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (allSelected) {
+        for (const d of pageDocs) next.delete(d.id);
+      } else {
+        for (const d of pageDocs) next.add(d.id);
+      }
+      return next;
+    });
   };
 
   const remove = useCallback(
@@ -139,6 +180,32 @@ export default function DocBrowser({ docs }: { docs: DocItem[] }) {
     }
   }, [q]);
 
+  const reembedAll = useCallback(async () => {
+    if (reembedBusy || docs.length === 0) return;
+    if (!window.confirm(`对 ${docs.length} 份文档全部重新嵌入？换嵌入模型后使用，耗时取决于文档量。`)) return;
+    setReembedBusy(true);
+    setReembedMsg('');
+    try {
+      const res = await fetch('/api/documents/reembed', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: docs.map((d) => d.id) }),
+      });
+      const data = (await res.json().catch(() => null)) as {
+        succeeded?: number;
+        failed?: number;
+        error?: string;
+      } | null;
+      if (!res.ok) throw new Error(data?.error || '重嵌失败');
+      setReembedMsg(`重嵌完成：成功 ${data?.succeeded ?? 0} / 失败 ${data?.failed ?? 0}`);
+      router.refresh();
+    } catch (e) {
+      setReembedMsg(e instanceof Error ? e.message : '重嵌失败');
+    } finally {
+      setReembedBusy(false);
+    }
+  }, [docs, reembedBusy, router]);
+
   const clearSearch = () => {
     setQ('');
     setResults(null);
@@ -207,31 +274,89 @@ export default function DocBrowser({ docs }: { docs: DocItem[] }) {
         </div>
       )}
 
+      {/* 筛选/排序栏 */}
+      <div className="flex flex-wrap items-center gap-2">
+        <input
+          value={nameFilter}
+          onChange={(e) => {
+            setNameFilter(e.target.value);
+            setPage(1);
+          }}
+          placeholder={t('按文件名过滤…')}
+          className="h-8 min-w-0 flex-1 rounded-lg bg-[#f5f5f7] px-3 text-[12px] outline-none focus:bg-[#ebebee]"
+        />
+        <select
+          value={extFilter}
+          onChange={(e) => {
+            setExtFilter(e.target.value);
+            setPage(1);
+          }}
+          className="h-8 rounded-lg bg-[#f5f5f7] px-2 text-[12px] outline-none"
+        >
+          <option value="all">{t('全部格式')}</option>
+          {exts.map((e) => (
+            <option key={e} value={e}>
+              .{e}
+            </option>
+          ))}
+        </select>
+        <select
+          value={sortKey}
+          onChange={(e) => setSortKey(e.target.value as typeof sortKey)}
+          className="h-8 rounded-lg bg-[#f5f5f7] px-2 text-[12px] outline-none"
+        >
+          <option value="createdAt">{t('最新在前')}</option>
+          <option value="name">{t('按名称')}</option>
+          <option value="size">{t('按大小')}</option>
+          <option value="chunks">{t('按块数')}</option>
+        </select>
+        <span className="text-[12px] text-[#a1a1a6]">
+          {filtered.length} / {docs.length} 份
+        </span>
+      </div>
+
+      {reembedMsg && <p className="text-[12px] text-[#6e6e73]">{reembedMsg}</p>}
+
       {/* 工具栏 */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-2">
         <label className="flex items-center gap-2 text-[13px] text-[#6e6e73]">
           <input type="checkbox" checked={allSelected} onChange={toggleAll} className="accent-[#1d1d1f]" />
-          {t('全选')}
+          {t('全选')}（本页 {pageDocs.length}）
         </label>
-        {selected.size > 0 ? (
-          <button
-            onClick={() => void remove([...selected])}
-            disabled={bulkBusy}
-            className="rounded-lg bg-[#d93025] px-3 py-1.5 text-[12px] font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-40"
-          >
-            {t('删除选中的 {n} 份文档', { n: selected.size })}
-          </button>
-        ) : (
-          <span className="text-[12px] text-[#a1a1a6]">{t('勾选文档可批量删除')}</span>
-        )}
+        <div className="flex items-center gap-2">
+          {docs.length > 0 && (
+            <button
+              onClick={() => void reembedAll()}
+              disabled={reembedBusy || bulkBusy}
+              className="rounded-lg bg-[#f5f5f7] px-3 py-1.5 text-[12px] font-medium text-[#1d1d1f] transition-opacity hover:bg-[#ebebee] disabled:opacity-40"
+              title="换嵌入模型后，对全部文档重建向量"
+            >
+              {reembedBusy ? '重嵌中…' : '全部重嵌'}
+            </button>
+          )}
+          {selected.size > 0 ? (
+            <button
+              onClick={() => void remove([...selected])}
+              disabled={bulkBusy}
+              className="rounded-lg bg-[#d93025] px-3 py-1.5 text-[12px] font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-40"
+            >
+              {t('删除选中的 {n} 份文档', { n: selected.size })}
+            </button>
+          ) : (
+            <span className="text-[12px] text-[#a1a1a6]">{t('勾选文档可批量删除')}</span>
+          )}
+        </div>
       </div>
 
       {/* 文档列表 */}
       {docs.length === 0 ? (
         <p className="py-6 text-[13px] text-[#86868b]">{t('暂无文档，拖入文件开始。')}</p>
+      ) : filtered.length === 0 ? (
+        <p className="py-6 text-[13px] text-[#86868b]">没有符合筛选条件的文档。</p>
       ) : (
+        <>
         <ul className="divide-y divide-[#f0f0f2]">
-          {docs.map((d) => {
+          {pageDocs.map((d) => {
             const checked = selected.has(d.id);
             return (
               <li key={d.id} className="group flex items-center gap-3 py-3">
@@ -286,6 +411,30 @@ export default function DocBrowser({ docs }: { docs: DocItem[] }) {
             );
           })}
         </ul>
+        {totalPages > 1 && (
+          <div className="flex items-center justify-between pt-3 text-[12px] text-[#6e6e73]">
+            <span>
+              第 {safePage} / {totalPages} 页
+            </span>
+            <div className="flex gap-2">
+              <button
+                onClick={() => gotoPage(safePage - 1)}
+                disabled={safePage <= 1}
+                className="rounded-lg bg-[#f5f5f7] px-3 py-1.5 disabled:opacity-40"
+              >
+                {t('上一页')}
+              </button>
+              <button
+                onClick={() => gotoPage(safePage + 1)}
+                disabled={safePage >= totalPages}
+                className="rounded-lg bg-[#f5f5f7] px-3 py-1.5 disabled:opacity-40"
+              >
+                {t('下一页')}
+              </button>
+            </div>
+          </div>
+        )}
+        </>
       )}
 
       {/* 原文查看弹窗 */}

@@ -1,6 +1,6 @@
 {
   "name": "doc-rag",
-  "version": "0.8.1",
+  "version": "0.9.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -9,7 +9,9 @@
     "lint": "eslint",
     "test": "node --import tsx --test \"tests/*.test.ts\"",
     "typecheck": "tsc --noEmit",
-    "import": "tsx scripts/import-cli.ts"
+    "import": "tsx scripts/import-cli.ts",
+    "backup": "tsx scripts/backup-cli.ts",
+    "export": "tsx scripts/export-cli.ts"
   },
   "engines": {
     "node": ">=22.5"
@@ -17,10 +19,10 @@
   "dependencies": {
     "@huggingface/transformers": "^4.2.0",
     "mammoth": "^1.12.1",
-    "next": "16.3.1",
+    "next": "16.3.5",
     "pdf-parse": "^1.1.1",
-    "react": "19.2.8",
-    "react-dom": "19.2.8"
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",

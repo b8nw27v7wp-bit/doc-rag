@@ -24,6 +24,9 @@ export function supportedExts(): string {
   return SUPPORTED.map((e) => `.${e}`).join(' / ');
 }
 
+/** 单文档字符上限（防 50MB 文本一次嵌入 OOM），可用 MAX_DOC_CHARS 覆盖 */
+export const MAX_DOC_CHARS = Math.max(1000, Number(process.env.MAX_DOC_CHARS) || 300_000);
+
 /** 去除 HTML 标签、脚本与样式，块级标签转行、解码常见实体 */
 export function stripHtml(html: string): string {
   return html
@@ -130,6 +133,11 @@ export async function parseDocument(fileName: string, buf: Buffer): Promise<Pars
     .trim();
 
   if (!text) throw new Error(`${safeName} 未能提取到文本内容（可能是扫描件/图片型 PDF）`);
+  if (text.length > MAX_DOC_CHARS) {
+    throw new Error(
+      `${safeName} 文本过长（${text.length.toLocaleString()} 字，上限 ${MAX_DOC_CHARS.toLocaleString()} 字），请拆分后上传或调大 MAX_DOC_CHARS`
+    );
+  }
 
   return { name: safeName, ext, text, charCount: text.length };
 }
